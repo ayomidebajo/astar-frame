@@ -28,8 +28,6 @@ type BalanceOf<Runtime> = <<Runtime as pallet_dapps_staking::Config>::Currency a
     <Runtime as frame_system::Config>::AccountId,
 >>::Balance;
 
-type AccountOf<Runtime> = <Runtime as frame_system::Config>::AccountId;
-
 #[cfg(test)]
 mod mock;
 #[cfg(test)]

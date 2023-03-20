@@ -49,11 +49,9 @@
 //!
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use codec::{Decode, Encode, HasCompact, MaxEncodedLen};
+use codec::{Decode, Encode, HasCompact};
 use frame_support::traits::Currency;
 use frame_system::{self as system};
-// use mock::AccountId;
-use pallet_balances::Account;
 use scale_info::TypeInfo;
 use sp_runtime::{
     traits::{AtLeast32BitUnsigned, Zero},

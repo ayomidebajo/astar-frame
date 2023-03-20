@@ -316,7 +316,7 @@ pub mod pallet {
         NominationTransferToSameContract,
         InvalidStaker,
         TooManyBeneficiaries,
-        BeneficiaryAlreadyRegistered,
+        AlreadyRegisteredBeneficiary,
     }
 
     #[pallet::hooks]
@@ -913,62 +913,61 @@ pub mod pallet {
                 Error::<T>::InvalidStaker
             );
 
-            // // Ensure we have something to claim
-            // let mut staker_info = Self::staker_info(&original_staker, &contract_id);
-            // let (era, staked) = staker_info.claim();
-            // ensure!(staked > Zero::zero(), Error::<T>::NotStakedContract);
+            // Ensure we have something to claim
+            let mut staker_info = Self::staker_info(&original_staker, &contract_id);
+            let (era, staked) = staker_info.claim();
+            ensure!(staked > Zero::zero(), Error::<T>::NotStakedContract);
 
-            // // get list of beneficiaries
-            // let list_of_beneficiaries = RewardBeneficiaries::<T>::get(&target);
+            let dapp_info =
+                RegisteredDapps::<T>::get(&contract_id).ok_or(Error::<T>::NotOperatedContract)?;
 
-            // // ensure the staker hasn't reached the maximum number of beneficiaries
-            // ensure!(
-            //     (list_of_beneficiaries.len() as u32) < T::MaxNumberOfBeneficiariesPerStaker::get(),
-            //     Error::<T>::TooManyBeneficiaries
-            // );
+            if let DAppState::Unregistered(unregister_era) = dapp_info.state {
+                ensure!(era < unregister_era, Error::<T>::NotOperatedContract);
+            }
 
-            // let dapp_info =
-            //     RegisteredDapps::<T>::get(&contract_id).ok_or(Error::<T>::NotOperatedContract)?;
+            // check era is valid
+            let current_era = Self::current_era();
+            ensure!(era < current_era, Error::<T>::EraOutOfBounds);
 
-            // if let DAppState::Unregistered(unregister_era) = dapp_info.state {
-            //     ensure!(era < unregister_era, Error::<T>::NotOperatedContract);
-            // }
+            // keep beneficiary info for later
+            let beneficiary_info = Self::reward_beneficiaries(&original_staker, &target);
 
-            // let current_era = Self::current_era();
-            // ensure!(era < current_era, Error::<T>::EraOutOfBounds);
+            //  validating staker's info to cash out rewards
+            let staking_info = Self::contract_stake_info(&contract_id, era).unwrap_or_default();
+            let reward_and_stake =
+                Self::general_era_info(era).ok_or(Error::<T>::UnknownEraReward)?;
 
-            // // ensure the beneficiary is not already registered
-            // for i in list_of_beneficiaries.clone() {
-            //     ensure!(
-            //         i.account != target,
-            //         Error::<T>::BeneficiaryAlreadyRegistered
-            //     );
-            // }
+            let (_, stakers_joint_reward) =
+                Self::dev_stakers_split(&staking_info, &reward_and_stake);
+            let staker_reward =
+                Perbill::from_rational(staked, staking_info.total) * stakers_joint_reward;
 
-            // // add the new beneficiary
-            // let new_beneficiary: RewardBeneficiary<T::AccountId, BalanceOf<T>> =
-            //     RewardBeneficiary {
-            //         account: target,
-            //         amount: Default::default(),
-            //     };
+            // Withdraw reward funds from the dapps staking pot
+            let reward_imbalance = T::Currency::withdraw(
+                &target,
+                staker_reward.clone(),
+                WithdrawReasons::TRANSFER,
+                ExistenceRequirement::AllowDeath,
+            )?;
 
-            // if list_of_beneficiaries.len() == 0 {
-            //     let mut new_list_of_beneficiaries: BoundedVec<
-            //         RewardBeneficiary<T::AccountId, BalanceOf<T>>,
-            //         T::MaxNumberOfBeneficiariesPerStaker,
-            //     > = BoundedVec::default();
+            // transfer reward to the beneficiary
+            T::Currency::resolve_creating(&target, reward_imbalance);
 
-            //     new_list_of_beneficiaries
-            //         .try_push(new_beneficiary.clone())
-            //         .expect("Maximum number of beneficiaries is reached!!");
-
-            //     RewardBeneficiaries::<T>::insert(&original_staker, new_list_of_beneficiaries);
-            // } else {
-            //     RewardBeneficiaries::<T>::mutate(&original_staker, |x| {
-            //         x.try_push(new_beneficiary.clone())
-            //             .expect("Maximum number of beneficiaries is reached!!");
-            //     });
-            // }
+            // check if target is already a beneficiary, no need to emit an error if it's found, we simply add the reward to the existing beneficiary and if it's not found we add it as a new beneficiary
+            if beneficiary_info.is_none() {
+                // add the new beneficiary
+                let new_beneficiary: RewardBeneficiary<T::AccountId, BalanceOf<T>> =
+                    RewardBeneficiary {
+                        next: EmbededDestination::None,
+                        amount: staker_reward,
+                    };
+                RewardBeneficiaries::<T>::insert(&original_staker, &target, new_beneficiary);
+            } else {
+                // update the existing beneficiary
+                let mut beneficiary = beneficiary_info.unwrap();
+                beneficiary.amount += staker_reward;
+                RewardBeneficiaries::<T>::insert(&original_staker, &target, beneficiary);
+            }
 
             Ok(())
         }

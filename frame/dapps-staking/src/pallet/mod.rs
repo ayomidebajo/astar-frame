@@ -896,7 +896,7 @@ pub mod pallet {
             Ok(().into())
         }
 
-        /// Register a delegated account for a staker.
+        /// delegate another account to claim rewards on behalf of the staker
         #[pallet::weight(0)]
         pub fn register_delegated_account_and_deposit_rewards(
             origin: OriginFor<T>,
@@ -944,7 +944,7 @@ pub mod pallet {
 
             // Withdraw reward funds from the dapps staking pot
             let reward_imbalance = T::Currency::withdraw(
-                &target,
+                &Self::account_id(),
                 staker_reward.clone(),
                 WithdrawReasons::TRANSFER,
                 ExistenceRequirement::AllowDeath,

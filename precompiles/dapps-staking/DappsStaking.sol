@@ -79,4 +79,6 @@ interface DappsStaking {
     /// @param amount amount to transfer from origin to target
     /// @param target_smart_contract target smart contract address
     function nomination_transfer(address origin_smart_contract, uint128 amount, address target_smart_contract) external;
+
+    //TODO: add created extrinsics here
 }

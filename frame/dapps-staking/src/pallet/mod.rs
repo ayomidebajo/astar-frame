@@ -94,6 +94,13 @@ pub mod pallet {
         #[pallet::constant]
         type MaxEraStakeValues: Get<u32>;
 
+        /// Maximum number of unique beneficiaries per staker.
+        /// This is used to limit the number of beneficiaries that can be stored in `RewardBeneficiaries` map.
+        /// This is also used to limit the number of beneficiaries that can be stored in `EraStake` struct.
+        /// This is also used to limit the number of beneficiaries that can be stored in `AccountLedger` struct.
+        #[pallet::constant]
+        type MaxNumberOfBeneficiariesPerStaker: Get<u32>;
+
         /// The overarching event type.
         type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 
@@ -177,6 +184,20 @@ pub mod pallet {
         Blake2_128Concat,
         T::SmartContract,
         StakerInfo<BalanceOf<T>>,
+        ValueQuery,
+    >;
+
+    /// List of every beneficiary for each staker.
+    #[pallet::storage]
+    #[pallet::getter(fn reward_beneficiaries)]
+    pub type RewardBeneficiaries<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<
+            RewardBeneficiary<T::AccountId, BalanceOf<T>>,
+            T::MaxNumberOfBeneficiariesPerStaker,
+        >,
         ValueQuery,
     >;
 
@@ -291,6 +312,9 @@ pub mod pallet {
         NotActiveStaker,
         /// Transfering nomination to the same contract
         NominationTransferToSameContract,
+        InvalidStaker,
+        TooManyBeneficiaries,
+        BeneficiaryAlreadyRegistered,
     }
 
     #[pallet::hooks]
@@ -868,6 +892,79 @@ pub mod pallet {
             ContractEraStake::<T>::insert(&contract_id, era, contract_stake_info);
 
             Ok(().into())
+        }
+
+        /// Register a delegated account for a staker.
+        #[pallet::weight(0)]
+        pub fn register_delegated_account(
+            origin: OriginFor<T>,
+            who: T::AccountId,
+        ) -> DispatchResult {
+            // ensure pallet is enabled
+            Self::ensure_pallet_enabled()?;
+
+            // ensure origin is a staker
+            let original_staker = ensure_signed(origin)?;
+            ensure!(
+                Ledger::<T>::contains_key(&original_staker),
+                Error::<T>::InvalidStaker
+            );
+
+            // get list of beneficiaries
+            let mut list_of_beneficiaries = RewardBeneficiaries::<T>::get(&who);
+
+            // ensure the staker hasn't reached the maximum number of beneficiaries
+            ensure!(
+                (list_of_beneficiaries.len() as u32) < T::MaxNumberOfBeneficiariesPerStaker::get(),
+                Error::<T>::TooManyBeneficiaries
+            );
+
+            // ensure the beneficiary is not already registered
+            for i in list_of_beneficiaries.clone() {
+                ensure!(i.account != who, Error::<T>::BeneficiaryAlreadyRegistered);
+            }
+
+            // add the new beneficiary
+            let new_beneficiary: RewardBeneficiary<T::AccountId, BalanceOf<T>> =
+                RewardBeneficiary {
+                    account: who,
+                    amount: Default::default(),
+                };
+
+            if list_of_beneficiaries.len() == 0 {
+                let mut new_list_of_beneficiaries: BoundedVec<
+                    RewardBeneficiary<T::AccountId, BalanceOf<T>>,
+                    T::MaxNumberOfBeneficiariesPerStaker,
+                > = BoundedVec::default();
+
+                new_list_of_beneficiaries
+                    .try_push(new_beneficiary.clone())
+                    .expect("Maximum number of beneficiaries is reached!!");
+
+                RewardBeneficiaries::<T>::insert(&original_staker, new_list_of_beneficiaries);
+            } else {
+                RewardBeneficiaries::<T>::mutate(&original_staker, |x| {
+                    x.try_push(new_beneficiary.clone())
+                        .expect("Maximum number of beneficiaries is reached!!");
+                });
+            }
+
+            Ok(())
+        }
+
+        #[pallet::weight(0)]
+        pub fn deposit_rewards_to_beneficiary(origin: OriginFor<T>) -> DispatchResult {
+            // ensure pallet is enabled
+            Self::ensure_pallet_enabled()?;
+
+            // ensure origin is a staker
+            let original_staker = ensure_signed(origin)?;
+            ensure!(
+                Ledger::<T>::contains_key(&original_staker),
+                Error::<T>::InvalidStaker
+            );
+
+            Ok(())
         }
 
         /// Force a new era at the start of the next block.

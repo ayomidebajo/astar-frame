@@ -49,7 +49,7 @@
 //!
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use codec::{Decode, Encode, HasCompact};
+use codec::{Decode, Encode, HasCompact, MaxEncodedLen};
 use frame_support::traits::Currency;
 use frame_system::{self as system};
 use scale_info::TypeInfo;
@@ -500,6 +500,16 @@ impl Default for RewardDestination {
     fn default() -> Self {
         RewardDestination::StakeBalance
     }
+}
+
+/// contains information about each beneficiary for a particular staker
+#[derive(Clone, PartialEq, Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo)]
+pub struct RewardBeneficiary<AccountId, Balance: HasCompact + MaxEncodedLen> {
+    /// Account delegated to which rewards are deposited.
+    pub account: AccountId,
+    /// Amount of rewards deposited.
+     #[codec(compact)]
+    pub amount: Balance,
 }
 
 /// Contains information about account's locked & unbonding balances.

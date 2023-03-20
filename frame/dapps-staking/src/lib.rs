@@ -52,6 +52,8 @@
 use codec::{Decode, Encode, HasCompact, MaxEncodedLen};
 use frame_support::traits::Currency;
 use frame_system::{self as system};
+// use mock::AccountId;
+use pallet_balances::Account;
 use scale_info::TypeInfo;
 use sp_runtime::{
     traits::{AtLeast32BitUnsigned, Zero},
@@ -502,13 +504,21 @@ impl Default for RewardDestination {
     }
 }
 
+#[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+pub enum EmbededDestination<AccountId> {
+    #[default]
+    None,
+    Destination(AccountId),
+}
+
 /// contains information about each beneficiary for a particular staker
-#[derive(Clone, PartialEq, Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo)]
-pub struct RewardBeneficiary<AccountId, Balance: HasCompact + MaxEncodedLen> {
-    /// Account delegated to which rewards are deposited.
-    pub account: AccountId,
+#[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
+
+pub struct RewardBeneficiary<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
+    /// next reward destination
+    pub next: EmbededDestination<AccountId>,
     /// Amount of rewards deposited.
-     #[codec(compact)]
+    #[codec(compact)]
     pub amount: Balance,
 }
 

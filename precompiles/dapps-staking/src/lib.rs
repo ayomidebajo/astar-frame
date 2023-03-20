@@ -22,9 +22,13 @@ use sp_std::marker::PhantomData;
 use sp_std::prelude::*;
 extern crate alloc;
 
+use alloc::vec::Vec;
+
 type BalanceOf<Runtime> = <<Runtime as pallet_dapps_staking::Config>::Currency as Currency<
     <Runtime as frame_system::Config>::AccountId,
 >>::Balance;
+
+type AccountOf<Runtime> = <Runtime as frame_system::Config>::AccountId;
 
 #[cfg(test)]
 mod mock;
@@ -291,6 +295,37 @@ where
         Ok(succeed(EvmDataWriter::new().write(true).build()))
     }
 
+    fn register_delegated_account_and_deposit_rewards(
+        handle: &mut impl PrecompileHandle,
+    ) -> EvmResult<PrecompileOutput> {
+        let mut input = handle.read_input()?;
+        input.expect_arguments(2)?;
+
+        // parse contract's address
+        let contract_h160 = input.read::<Address>()?.0;
+        let contract_id = Self::decode_smart_contract(contract_h160)?;
+
+        // parse target address for claiming rewards
+        let beneficiary_vec: Vec<u8> = input.read::<Bytes>()?.into();
+        let beneficiary = Self::parse_input_address(beneficiary_vec)?;
+
+        // Build call with origin.
+        let origin = R::AddressMapping::into_account_id(handle.context().caller);
+
+        log::trace!(target: "ds-precompile", "register_delegated_account_and_deposit_rewards {:?} {:?}", contract_id, beneficiary);
+
+        let call =
+            pallet_dapps_staking::Call::<R>::register_delegated_account_and_deposit_rewards {
+                contract_id,
+                target: beneficiary,
+            }
+            .into();
+
+        RuntimeHelper::<R>::try_dispatch(handle, Some(origin).into(), call)?;
+
+        Ok(succeed(EvmDataWriter::new().write(true).build()))
+    }
+
     /// Set claim reward destination for the caller
     fn set_reward_destination(handle: &mut impl PrecompileHandle) -> EvmResult<PrecompileOutput> {
         let mut input = handle.read_input()?;
@@ -438,6 +473,9 @@ pub enum Action {
     ClaimDapp = "claim_dapp(address,uint128)",
     ClaimStaker = "claim_staker(address)",
     SetRewardDestination = "set_reward_destination(uint8)",
+    // this is the evm function selector for the precompile staking wrapper
+    RegisterDelegatedAccountAndDepositRewards =
+        "register_delegated_account_and_deposit_rewards(uint128, address)",
     WithdrawFromUnregistered = "withdraw_from_unregistered(address)",
     NominationTransfer = "nomination_transfer(address,uint128,address)",
 }
@@ -486,6 +524,9 @@ where
             Action::WithdrawUnbounded => Self::withdraw_unbonded(handle),
             Action::ClaimDapp => Self::claim_dapp(handle),
             Action::ClaimStaker => Self::claim_staker(handle),
+            Action::RegisterDelegatedAccountAndDepositRewards => {
+                Self::register_delegated_account_and_deposit_rewards(handle)
+            }
             Action::SetRewardDestination => Self::set_reward_destination(handle),
             Action::WithdrawFromUnregistered => Self::withdraw_from_unregistered(handle),
             Action::NominationTransfer => Self::nomination_transfer(handle),

@@ -187,18 +187,20 @@ pub mod pallet {
         ValueQuery,
     >;
 
-    /// List of every beneficiary for each staker.
+    /// stores the staker's reward beneficiaries
+    /// this first account is the staker's account
+    /// the second account is the beneficiary's account
+    /// the value is the beneficiary's info, which contains the next beneficiary if it exists and the amount deposited into the third beneficary.
     #[pallet::storage]
     #[pallet::getter(fn reward_beneficiaries)]
-    pub type RewardBeneficiaries<T: Config> = StorageMap<
+    pub type RewardBeneficiaries<T: Config> = StorageDoubleMap<
         _,
         Blake2_128Concat,
         T::AccountId,
-        BoundedVec<
-            RewardBeneficiary<T::AccountId, BalanceOf<T>>,
-            T::MaxNumberOfBeneficiariesPerStaker,
-        >,
-        ValueQuery,
+        Blake2_128Concat,
+        T::AccountId,
+        RewardBeneficiary<T::AccountId, BalanceOf<T>>,
+        OptionQuery,
     >;
 
     /// Stores the current pallet storage version.
@@ -896,9 +898,10 @@ pub mod pallet {
 
         /// Register a delegated account for a staker.
         #[pallet::weight(0)]
-        pub fn register_delegated_account(
+        pub fn register_delegated_account_and_deposit_rewards(
             origin: OriginFor<T>,
-            who: T::AccountId,
+            contract_id: T::SmartContract,
+            target: T::AccountId,
         ) -> DispatchResult {
             // ensure pallet is enabled
             Self::ensure_pallet_enabled()?;
@@ -910,44 +913,62 @@ pub mod pallet {
                 Error::<T>::InvalidStaker
             );
 
-            // get list of beneficiaries
-            let mut list_of_beneficiaries = RewardBeneficiaries::<T>::get(&who);
+            // // Ensure we have something to claim
+            // let mut staker_info = Self::staker_info(&original_staker, &contract_id);
+            // let (era, staked) = staker_info.claim();
+            // ensure!(staked > Zero::zero(), Error::<T>::NotStakedContract);
 
-            // ensure the staker hasn't reached the maximum number of beneficiaries
-            ensure!(
-                (list_of_beneficiaries.len() as u32) < T::MaxNumberOfBeneficiariesPerStaker::get(),
-                Error::<T>::TooManyBeneficiaries
-            );
+            // // get list of beneficiaries
+            // let list_of_beneficiaries = RewardBeneficiaries::<T>::get(&target);
 
-            // ensure the beneficiary is not already registered
-            for i in list_of_beneficiaries.clone() {
-                ensure!(i.account != who, Error::<T>::BeneficiaryAlreadyRegistered);
-            }
+            // // ensure the staker hasn't reached the maximum number of beneficiaries
+            // ensure!(
+            //     (list_of_beneficiaries.len() as u32) < T::MaxNumberOfBeneficiariesPerStaker::get(),
+            //     Error::<T>::TooManyBeneficiaries
+            // );
 
-            // add the new beneficiary
-            let new_beneficiary: RewardBeneficiary<T::AccountId, BalanceOf<T>> =
-                RewardBeneficiary {
-                    account: who,
-                    amount: Default::default(),
-                };
+            // let dapp_info =
+            //     RegisteredDapps::<T>::get(&contract_id).ok_or(Error::<T>::NotOperatedContract)?;
 
-            if list_of_beneficiaries.len() == 0 {
-                let mut new_list_of_beneficiaries: BoundedVec<
-                    RewardBeneficiary<T::AccountId, BalanceOf<T>>,
-                    T::MaxNumberOfBeneficiariesPerStaker,
-                > = BoundedVec::default();
+            // if let DAppState::Unregistered(unregister_era) = dapp_info.state {
+            //     ensure!(era < unregister_era, Error::<T>::NotOperatedContract);
+            // }
 
-                new_list_of_beneficiaries
-                    .try_push(new_beneficiary.clone())
-                    .expect("Maximum number of beneficiaries is reached!!");
+            // let current_era = Self::current_era();
+            // ensure!(era < current_era, Error::<T>::EraOutOfBounds);
 
-                RewardBeneficiaries::<T>::insert(&original_staker, new_list_of_beneficiaries);
-            } else {
-                RewardBeneficiaries::<T>::mutate(&original_staker, |x| {
-                    x.try_push(new_beneficiary.clone())
-                        .expect("Maximum number of beneficiaries is reached!!");
-                });
-            }
+            // // ensure the beneficiary is not already registered
+            // for i in list_of_beneficiaries.clone() {
+            //     ensure!(
+            //         i.account != target,
+            //         Error::<T>::BeneficiaryAlreadyRegistered
+            //     );
+            // }
+
+            // // add the new beneficiary
+            // let new_beneficiary: RewardBeneficiary<T::AccountId, BalanceOf<T>> =
+            //     RewardBeneficiary {
+            //         account: target,
+            //         amount: Default::default(),
+            //     };
+
+            // if list_of_beneficiaries.len() == 0 {
+            //     let mut new_list_of_beneficiaries: BoundedVec<
+            //         RewardBeneficiary<T::AccountId, BalanceOf<T>>,
+            //         T::MaxNumberOfBeneficiariesPerStaker,
+            //     > = BoundedVec::default();
+
+            //     new_list_of_beneficiaries
+            //         .try_push(new_beneficiary.clone())
+            //         .expect("Maximum number of beneficiaries is reached!!");
+
+            //     RewardBeneficiaries::<T>::insert(&original_staker, new_list_of_beneficiaries);
+            // } else {
+            //     RewardBeneficiaries::<T>::mutate(&original_staker, |x| {
+            //         x.try_push(new_beneficiary.clone())
+            //             .expect("Maximum number of beneficiaries is reached!!");
+            //     });
+            // }
 
             Ok(())
         }

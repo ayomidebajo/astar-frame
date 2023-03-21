@@ -191,6 +191,7 @@ pub mod pallet {
     /// this first account is the staker's account
     /// the second account is the beneficiary's account
     /// the value is the beneficiary's info, which contains the next beneficiary if it exists and the amount deposited into the third beneficary.
+    /// i.e ALICE -> BOB -> CAROL
     #[pallet::storage]
     #[pallet::getter(fn reward_beneficiaries)]
     pub type RewardBeneficiaries<T: Config> = StorageDoubleMap<
@@ -317,6 +318,8 @@ pub mod pallet {
         InvalidStaker,
         TooManyBeneficiaries,
         AlreadyRegisteredBeneficiary,
+        BeneficiaryNotFound,
+        BeneficiaryAlreadyHasSecondBeneficiary,
     }
 
     #[pallet::hooks]
@@ -950,9 +953,6 @@ pub mod pallet {
                 ExistenceRequirement::AllowDeath,
             )?;
 
-            // transfer reward to the beneficiary
-            T::Currency::resolve_creating(&target, reward_imbalance);
-
             // check if target is already a beneficiary, no need to emit an error if it's found, we simply add the reward to the existing beneficiary and if it's not found we add it as a new beneficiary
             if beneficiary_info.is_none() {
                 // add the new beneficiary
@@ -961,28 +961,112 @@ pub mod pallet {
                         next: EmbededDestination::None,
                         amount: staker_reward,
                     };
+                // transfer reward to the beneficiary
+                T::Currency::resolve_creating(&target, reward_imbalance);
                 RewardBeneficiaries::<T>::insert(&original_staker, &target, new_beneficiary);
             } else {
                 // update the existing beneficiary
-                let mut beneficiary = beneficiary_info.unwrap();
-                beneficiary.amount += staker_reward;
-                RewardBeneficiaries::<T>::insert(&original_staker, &target, beneficiary);
+
+                // this is for mutating the beneficiary info
+                let b_info = beneficiary_info.clone().unwrap();
+
+                // check if the beneficiary has delegated to another account, if it exists we add the reward to the second delegated account
+                if let EmbededDestination::Destination { who, mut amount } = &b_info.next {
+                    // if the beneficiary has delegated to another account, we add the reward to the delegated account
+
+                    // transfer reward to the beneficiary
+                    T::Currency::resolve_creating(who, reward_imbalance);
+                    // update the beneficiary info
+                    amount += staker_reward;
+
+                    RewardBeneficiaries::<T>::insert(&original_staker, &target, b_info);
+                } else {
+                    // unwrap is safe because we checked if it's none before
+                    let mut beneficiary = beneficiary_info.unwrap();
+                    beneficiary.amount += staker_reward;
+                    // transfer reward to the beneficiary
+                    T::Currency::resolve_creating(&target, reward_imbalance);
+                    RewardBeneficiaries::<T>::insert(&original_staker, &target, beneficiary);
+                }
             }
 
             Ok(())
         }
 
         #[pallet::weight(0)]
-        pub fn deposit_rewards_to_beneficiary(origin: OriginFor<T>) -> DispatchResult {
+        pub fn deposit_rewards_to_second_beneficiary(
+            origin: OriginFor<T>,
+            original_staker: T::AccountId,
+            contract_id: T::SmartContract,
+            target: T::AccountId,
+        ) -> DispatchResult {
             // ensure pallet is enabled
             Self::ensure_pallet_enabled()?;
 
-            // ensure origin is a staker
-            let original_staker = ensure_signed(origin)?;
+            // ensure staker and first beneficiary are valid
+            let first_beneficiary = ensure_signed(origin)?;
             ensure!(
                 Ledger::<T>::contains_key(&original_staker),
                 Error::<T>::InvalidStaker
             );
+
+            // ensure beneficiary info exists
+            let beneficiary_info = Self::reward_beneficiaries(&original_staker, &first_beneficiary);
+            ensure!(beneficiary_info.is_some(), Error::<T>::BeneficiaryNotFound);
+
+            // Ensure we have something to claim
+            let mut staker_info = Self::staker_info(&original_staker, &contract_id);
+            let (era, staked) = staker_info.claim();
+            ensure!(staked > Zero::zero(), Error::<T>::NotStakedContract);
+
+            let dapp_info =
+                RegisteredDapps::<T>::get(&contract_id).ok_or(Error::<T>::NotOperatedContract)?;
+
+            if let DAppState::Unregistered(unregister_era) = dapp_info.state {
+                ensure!(era < unregister_era, Error::<T>::NotOperatedContract);
+            }
+
+            // check era is valid
+            let current_era = Self::current_era();
+            ensure!(era < current_era, Error::<T>::EraOutOfBounds);
+
+            // keep beneficiary info for later
+            let beneficiary_info = Self::reward_beneficiaries(&original_staker, &target);
+
+            //  validating staker's info to cash out rewards
+            let staking_info = Self::contract_stake_info(&contract_id, era).unwrap_or_default();
+            let reward_and_stake =
+                Self::general_era_info(era).ok_or(Error::<T>::UnknownEraReward)?;
+
+            let (_, stakers_joint_reward) =
+                Self::dev_stakers_split(&staking_info, &reward_and_stake);
+            let staker_reward =
+                Perbill::from_rational(staked, staking_info.total) * stakers_joint_reward;
+
+            // Withdraw reward funds from the dapps staking pot
+            let reward_imbalance = T::Currency::withdraw(
+                &Self::account_id(),
+                staker_reward.clone(),
+                WithdrawReasons::TRANSFER,
+                ExistenceRequirement::AllowDeath,
+            )?;
+
+            if beneficiary_info.is_some() {
+                let mut b_info = beneficiary_info.clone().unwrap();
+
+                ensure!(
+                    b_info.next == EmbededDestination::None,
+                    Error::<T>::BeneficiaryAlreadyHasSecondBeneficiary
+                );
+
+                b_info.next = EmbededDestination::Destination {
+                    who: target.clone(),
+                    amount: staker_reward,
+                };
+                
+                T::Currency::resolve_creating(&target, reward_imbalance);
+                RewardBeneficiaries::<T>::insert(&original_staker, &target, b_info);
+            }
 
             Ok(())
         }

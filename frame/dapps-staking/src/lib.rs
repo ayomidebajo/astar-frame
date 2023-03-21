@@ -503,10 +503,13 @@ impl Default for RewardDestination {
 }
 
 #[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-pub enum EmbededDestination<AccountId> {
+pub enum EmbededDestination<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
     #[default]
     None,
-    Destination(AccountId),
+    Destination {
+        who: AccountId,
+        amount: Balance,
+    },
 }
 
 /// contains information about each beneficiary for a particular staker
@@ -514,7 +517,7 @@ pub enum EmbededDestination<AccountId> {
 
 pub struct RewardBeneficiary<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
     /// next reward destination
-    pub next: EmbededDestination<AccountId>,
+    pub next: EmbededDestination<AccountId, Balance>,
     /// Amount of rewards deposited.
     #[codec(compact)]
     pub amount: Balance,

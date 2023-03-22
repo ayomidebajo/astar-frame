@@ -513,10 +513,16 @@ pub(crate) fn assert_claim_staker(claimer: AccountId, contract_id: &MockSmartCon
             * stakers_joint_reward;
     let issuance_before_claim = <TestRuntime as Config>::Currency::total_issuance();
 
+    // let first_balance = <TestRuntime as Config>::Currency::free_balance(&claimer);
+
     assert_ok!(DappsStaking::claim_staker(
         Origin::signed(claimer),
         contract_id.clone(),
     ));
+
+    // let second_balance = <TestRuntime as Config>::Currency::free_balance(&claimer);
+
+    // println!("first balance: {:?}, second balance: {:?}", first_balance, second_balance);
 
     let final_state_current_era = MemorySnapshot::all(current_era, contract_id, claimer);
 
@@ -526,6 +532,11 @@ pub(crate) fn assert_claim_staker(claimer: AccountId, contract_id: &MockSmartCon
         &final_state_current_era,
         calculated_reward,
     );
+
+    // println!(
+    //     "here {:?}",
+    //     final_state_current_era.ledger.reward_destination
+    // );
 
     // check for stake event if restaking is performed
     if DappsStaking::should_restake_reward(
@@ -568,6 +579,136 @@ pub(crate) fn assert_claim_staker(claimer: AccountId, contract_id: &MockSmartCon
     assert_eq!(issuance_before_claim, issuance_after_claim);
 
     // Old `claim_era` contract info should never be changed
+    let final_state_claim_era = MemorySnapshot::all(claim_era, contract_id, claimer);
+    assert_eq!(
+        init_state_claim_era.contract_info,
+        final_state_claim_era.contract_info
+    );
+}
+
+/// Used to perform claim for stakers with success assertion
+pub(crate) fn assert_recieve_claim_rewards_for_staker(
+    claimer: AccountId,
+    contract_id: &MockSmartContract<AccountId>,
+    target: AccountId,
+) {
+    let (claim_era, _) = DappsStaking::staker_info(&claimer, contract_id).claim();
+    let current_era = DappsStaking::current_era();
+
+    let first_balance = <TestRuntime as Config>::Currency::free_balance(&target);
+
+    //clean up possible leftover events
+    System::reset_events();
+
+    let init_state_claim_era = MemorySnapshot::all(claim_era, contract_id, claimer);
+    let init_state_current_era = MemorySnapshot::all(current_era, contract_id, claimer);
+
+    // Calculate contract portion of the reward
+    let (_, stakers_joint_reward) = DappsStaking::dev_stakers_split(
+        &init_state_claim_era.contract_info,
+        &init_state_claim_era.era_info,
+    );
+
+    let (claim_era, staked) = init_state_claim_era.staker_info.clone().claim();
+    assert!(claim_era > 0); // Sanity check - if this fails, method is being used incorrectly
+
+    // Cannot claim rewards post unregister era, this indicates a bug!
+    if let DAppState::Unregistered(unregistered_era) = init_state_claim_era.dapp_info.state {
+        assert!(unregistered_era > claim_era);
+    }
+
+    let calculated_reward =
+        Perbill::from_rational(staked, init_state_claim_era.contract_info.total)
+            * stakers_joint_reward;
+    let issuance_before_claim = <TestRuntime as Config>::Currency::total_issuance();
+
+    assert_ok!(
+        DappsStaking::register_delegated_account_and_deposit_rewards(
+            Origin::signed(claimer),
+            contract_id.clone(),
+            target.clone(),
+        )
+    );
+    // test balance of beneficiary
+    assert_eq!(
+        first_balance + calculated_reward,
+        <TestRuntime as Config>::Currency::free_balance(&target)
+    );
+
+    // println!("first_balance: {:?} claimer balance {:?}", first_balance, claimer);
+    // println!(
+    //     "second_balance: {:?} reward: {:?}",
+    //     <TestRuntime as Config>::Currency::free_balance(&target), calculated_reward
+    // );
+
+    let final_state_current_era = MemorySnapshot::all(current_era, contract_id, claimer);
+
+    // println!(
+    //     "final_state_current_era: {:?}",
+    //     final_state_current_era.ledger.reward_destination
+    // );
+
+    // restake shouldn't be performed
+    assert_eq!(
+        DappsStaking::should_restake_reward(
+            final_state_current_era.ledger.reward_destination,
+            final_state_current_era.dapp_info.state,
+            final_state_current_era.staker_info.latest_staked_value()
+        ),
+        false
+    );
+
+    if DappsStaking::should_restake_reward(
+        init_state_current_era.ledger.reward_destination,
+        init_state_current_era.dapp_info.state,
+        init_state_current_era.staker_info.latest_staked_value(),
+    ) {
+        // There should be only 1 event, ClaimRewardsAndDepositToBeneficiary
+        // if there's less, panic is acceptable
+        let events = dapps_staking_events();
+        // println!("print events {:#?}", events);
+        let last_event = &events[events.len() - 1];
+        assert_eq!(
+            last_event.clone(),
+            Event::<TestRuntime>::ClaimRewardsAndDepositToBeneficiary(
+                claimer,
+                contract_id.clone(),
+                claim_era,
+                calculated_reward,
+                target.clone()
+            )
+        );
+    }
+
+    // last event should be laimRewardsAndDepositToBeneficiary, regardless of restaking
+    System::assert_last_event(mock::Event::DappsStaking(
+        Event::ClaimRewardsAndDepositToBeneficiary(
+            claimer,
+            contract_id.clone(),
+            claim_era,
+            calculated_reward,
+            target.clone(),
+        ),
+    ));
+
+    let (new_era, _) = final_state_current_era.staker_info.clone().claim();
+    if final_state_current_era.staker_info.is_empty() {
+        assert!(new_era.is_zero());
+        assert!(!GeneralStakerInfo::<TestRuntime>::contains_key(
+            &claimer,
+            contract_id
+        ));
+    } else {
+        // println!("new_era: {:?} claim_era: {:?}", new_era, claim_era);
+        assert!(new_era > claim_era);
+    }
+    assert!(new_era.is_zero() || new_era > claim_era);
+
+    // Claim shouldn't mint new tokens, instead it should just transfer from the dapps staking pallet account
+    let issuance_after_claim = <TestRuntime as Config>::Currency::total_issuance();
+    assert_eq!(issuance_before_claim, issuance_after_claim);
+
+    // // Old `claim_era` contract info should never be changed
     let final_state_claim_era = MemorySnapshot::all(claim_era, contract_id, claimer);
     assert_eq!(
         init_state_claim_era.contract_info,

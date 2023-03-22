@@ -492,6 +492,7 @@ fn set_reward_destination_verify(staker: TestAccount, reward_destination: Reward
     let reward_destination_raw: u8 = match reward_destination {
         RewardDestination::FreeBalance => 0,
         RewardDestination::StakeBalance => 1,
+        RewardDestination::BeneficiaryBalance => 2,
     };
     precompiles()
         .prepare_test(

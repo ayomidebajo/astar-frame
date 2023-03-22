@@ -257,6 +257,21 @@ pub mod pallet {
             BalanceOf<T>,
             T::SmartContract,
         ),
+
+        /// Rewards deposited into beneficiary account
+        ///
+        ClaimRewardsAndDepositToBeneficiary(
+            /// Staker's account
+            T::AccountId,
+            /// The smart contract in particular
+            T::SmartContract,
+            /// The era index in particular
+            EraIndex,
+            /// The amount claimed and deposited into the beneficiary account
+            BalanceOf<T>,
+            /// The account of the beneficiary the rewards are being deposited into
+            T::AccountId,
+        ),
     }
 
     #[pallet::error]
@@ -945,6 +960,14 @@ pub mod pallet {
             let staker_reward =
                 Perbill::from_rational(staked, staking_info.total) * stakers_joint_reward;
 
+            let mut ledger = Self::ledger(&original_staker);
+
+            // set reward destination instead of relying on the default
+            ledger.reward_destination = RewardDestination::BeneficiaryBalance;
+
+            // update ledger
+            Ledger::<T>::insert(&original_staker, ledger);
+
             // Withdraw reward funds from the dapps staking pot
             let reward_imbalance = T::Currency::withdraw(
                 &Self::account_id(),
@@ -964,21 +987,41 @@ pub mod pallet {
                 // transfer reward to the beneficiary
                 T::Currency::resolve_creating(&target, reward_imbalance);
                 RewardBeneficiaries::<T>::insert(&original_staker, &target, new_beneficiary);
+                Self::deposit_event(Event::<T>::ClaimRewardsAndDepositToBeneficiary(
+                    original_staker.clone(),
+                    contract_id.clone(),
+                    era.clone(),
+                    staker_reward,
+                    target,
+                ))
             } else {
                 // update the existing beneficiary
 
                 // this is for mutating the beneficiary info
+                // unwrap is safe because we checked if it's none before
                 let b_info = beneficiary_info.clone().unwrap();
 
                 // check if the beneficiary has delegated to another account, if it exists we add the reward to the second delegated account
-                if let EmbededDestination::Destination { who, mut amount } = &b_info.next {
-                    // if the beneficiary has delegated to another account, we add the reward to the delegated account
+                if let EmbededDestination::Destination {
+                    ref who,
+                    mut amount,
+                } = b_info.next
+                {
+                    // let stuff = *who.clone();
+                    // if the beneficiary has delegated to another account, we add the reward to the delegated account i.e ALICE(staker) -> BOB(first beneficiary) -> CAROL(second beneficiary)
 
                     // transfer reward to the beneficiary
-                    T::Currency::resolve_creating(who, reward_imbalance);
+                    T::Currency::resolve_creating(&who, reward_imbalance);
                     // update the beneficiary info
                     amount += staker_reward;
 
+                    Self::deposit_event(Event::<T>::ClaimRewardsAndDepositToBeneficiary(
+                        original_staker.clone(),
+                        contract_id.clone(),
+                        era.clone(),
+                        staker_reward.clone(),
+                        who.clone(),
+                    ));
                     RewardBeneficiaries::<T>::insert(&original_staker, &target, b_info);
                 } else {
                     // unwrap is safe because we checked if it's none before
@@ -986,15 +1029,25 @@ pub mod pallet {
                     beneficiary.amount += staker_reward;
                     // transfer reward to the beneficiary
                     T::Currency::resolve_creating(&target, reward_imbalance);
+
                     RewardBeneficiaries::<T>::insert(&original_staker, &target, beneficiary);
+
+                    Self::deposit_event(Event::<T>::ClaimRewardsAndDepositToBeneficiary(
+                        original_staker.clone(),
+                        contract_id.clone(),
+                        era.clone(),
+                        staker_reward.clone(),
+                        target,
+                    ));
                 }
             }
 
+            Self::update_staker_info(&original_staker, &contract_id, staker_info);
             Ok(())
         }
 
         #[pallet::weight(0)]
-        pub fn deposit_rewards_to_second_beneficiary(
+        pub fn deposit_rewards_to_second_beneficiary_and_register_second_beneficiary(
             origin: OriginFor<T>,
             original_staker: T::AccountId,
             contract_id: T::SmartContract,
@@ -1063,7 +1116,7 @@ pub mod pallet {
                     who: target.clone(),
                     amount: staker_reward,
                 };
-                
+
                 T::Currency::resolve_creating(&target, reward_imbalance);
                 RewardBeneficiaries::<T>::insert(&original_staker, &target, b_info);
             }

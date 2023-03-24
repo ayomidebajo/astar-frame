@@ -293,7 +293,9 @@ where
         Ok(succeed(EvmDataWriter::new().write(true).build()))
     }
 
-    fn register_delegated_account_and_deposit_rewards(
+    /// Deposit rewards to the delegated beneficiary. Also creates a new one if it doesn't exist.
+    /// Note that this only applies to the first beneficiary.
+    fn deposit_rewards_to_delegated_beneficiary(
         handle: &mut impl PrecompileHandle,
     ) -> EvmResult<PrecompileOutput> {
         let mut input = handle.read_input()?;
@@ -312,12 +314,11 @@ where
 
         log::trace!(target: "ds-precompile", "register_delegated_account_and_deposit_rewards {:?} {:?}", contract_id, beneficiary);
 
-        let call =
-            pallet_dapps_staking::Call::<R>::register_delegated_account_and_deposit_rewards {
-                contract_id,
-                target: beneficiary,
-            }
-            .into();
+        let call = pallet_dapps_staking::Call::<R>::deposit_rewards_to_delegated_beneficiary {
+            contract_id,
+            target: beneficiary,
+        }
+        .into();
 
         RuntimeHelper::<R>::try_dispatch(handle, Some(origin).into(), call)?;
 
@@ -473,7 +474,7 @@ pub enum Action {
     SetRewardDestination = "set_reward_destination(uint8)",
     // this is the evm function selector for the precompile staking wrapper
     RegisterDelegatedAccountAndDepositRewards =
-        "register_delegated_account_and_deposit_rewards(uint128, address)",
+        "deposit_rewards_to_delegated_beneficiary(uint128, address)",
     WithdrawFromUnregistered = "withdraw_from_unregistered(address)",
     NominationTransfer = "nomination_transfer(address,uint128,address)",
 }
@@ -523,7 +524,7 @@ where
             Action::ClaimDapp => Self::claim_dapp(handle),
             Action::ClaimStaker => Self::claim_staker(handle),
             Action::RegisterDelegatedAccountAndDepositRewards => {
-                Self::register_delegated_account_and_deposit_rewards(handle)
+                Self::deposit_rewards_to_delegated_beneficiary(handle)
             }
             Action::SetRewardDestination => Self::set_reward_destination(handle),
             Action::WithdrawFromUnregistered => Self::withdraw_from_unregistered(handle),

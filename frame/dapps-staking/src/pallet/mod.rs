@@ -96,8 +96,6 @@ pub mod pallet {
 
         /// Maximum number of unique beneficiaries per staker.
         /// This is used to limit the number of beneficiaries that can be stored in `RewardBeneficiaries` map.
-        /// This is also used to limit the number of beneficiaries that can be stored in `EraStake` struct.
-        /// This is also used to limit the number of beneficiaries that can be stored in `AccountLedger` struct.
         #[pallet::constant]
         type MaxNumberOfBeneficiariesPerStaker: Get<u32>;
 
@@ -187,11 +185,12 @@ pub mod pallet {
         ValueQuery,
     >;
 
-    /// stores the staker's reward beneficiaries
-    /// this first account is the staker's account
-    /// the second account is the beneficiary's account
-    /// the value is the beneficiary's info, which contains the next beneficiary if it exists and the amount deposited into the third beneficary.
-    /// i.e ALICE -> BOB -> CAROL
+    /// Stores the staker's reward beneficiaries
+    /// This first account is the staker's account
+    /// The second account is the beneficiary's account
+    ///
+    /// Using this illustration: ALICE -> BOB -> CAROL
+    /// If BOB is a beneficiary, the he delegates his role to CAROL, then the reward will be transferred to CAROL, and also BOB makes himself inactive and CAROL active.
     #[pallet::storage]
     #[pallet::getter(fn reward_beneficiaries)]
     pub type RewardBeneficiaries<T: Config> = StorageDoubleMap<
@@ -200,8 +199,20 @@ pub mod pallet {
         T::AccountId,
         Blake2_128Concat,
         T::AccountId,
-        RewardBeneficiary<T::AccountId, BalanceOf<T>>,
+        RewardBeneficiary<T::SmartContract, BalanceOf<T>>,
         OptionQuery,
+    >;
+
+    /// Stores the list of beneficiaries for a particular staker.
+    /// This is also used to limit the number of beneficiaries that can be stored in `RewardBeneficiaries` map.
+    #[pallet::storage]
+    #[pallet::getter(fn staker_beneficiaries)]
+    pub type StakerBeneficiaries<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Vec<BeneficiaryInfo<T::AccountId>>,
+        ValueQuery,
     >;
 
     /// Stores the current pallet storage version.
@@ -259,7 +270,6 @@ pub mod pallet {
         ),
 
         /// Rewards deposited into beneficiary account
-        ///
         ClaimRewardsAndDepositToBeneficiary(
             /// Staker's account
             T::AccountId,
@@ -270,6 +280,36 @@ pub mod pallet {
             /// The amount claimed and deposited into the beneficiary account
             BalanceOf<T>,
             /// The account of the beneficiary the rewards are being deposited into
+            T::AccountId,
+        ),
+
+        /// Rewards deposited into delegated account
+        TransferRewardsToDelegatedAccount(
+            /// The delegator's account which also a beneficiary e.g BOB
+            T::AccountId,
+            /// The amount claimed and deposited into the delegated beneficiary account
+            BalanceOf<T>,
+            /// The account of the beneficiary the rewards are being deposited into e.g CAROL
+            T::AccountId,
+        ),
+
+        /// Replace Delegated Beneficiary
+        ReplaceBeneficiary(
+            /// The staker's account
+            T::AccountId,
+            /// The old beneficiary account
+            T::AccountId,
+            /// The new beneficiary account
+            T::AccountId,
+        ),
+
+        /// Rewards returned to the staker's account
+        ResetStashLocation(
+            /// The staker's account
+            T::AccountId,
+            /// The amount claimed and deposited into the staker's account
+            BalanceOf<T>,
+            /// The account of the beneficiary the rewards are being removed from
             T::AccountId,
         ),
     }
@@ -331,10 +371,12 @@ pub mod pallet {
         /// Transfering nomination to the same contract
         NominationTransferToSameContract,
         InvalidStaker,
-        TooManyBeneficiaries,
-        AlreadyRegisteredBeneficiary,
+        MaxBeneficiariesReached,
+        BeneficiaryAlreadyExists,
         BeneficiaryNotFound,
         BeneficiaryAlreadyHasSecondBeneficiary,
+        InvalidBeneficiary,
+        BeneficiaryNotActive,
     }
 
     #[pallet::hooks]
@@ -914,9 +956,14 @@ pub mod pallet {
             Ok(().into())
         }
 
-        /// delegate another account to claim rewards on behalf of the staker
+        ///////////  NEW CHANGES /////////
+
+        /// Delegate another account to claim rewards on behalf of the staker
+        /// `origin` must be a staker
+        /// `target` must be a valid account (beneficiary's account)
+        /// `contract_id` must be a valid contract
         #[pallet::weight(0)]
-        pub fn register_delegated_account_and_deposit_rewards(
+        pub fn deposit_rewards_and_delegate_beneficiary(
             origin: OriginFor<T>,
             contract_id: T::SmartContract,
             target: T::AccountId,
@@ -949,6 +996,7 @@ pub mod pallet {
 
             // keep beneficiary info for later
             let beneficiary_info = Self::reward_beneficiaries(&original_staker, &target);
+            let list_of_beneficiaries = Self::staker_beneficiaries(&original_staker);
 
             //  validating staker's info to cash out rewards
             let staking_info = Self::contract_stake_info(&contract_id, era).unwrap_or_default();
@@ -960,14 +1008,6 @@ pub mod pallet {
             let staker_reward =
                 Perbill::from_rational(staked, staking_info.total) * stakers_joint_reward;
 
-            let mut ledger = Self::ledger(&original_staker);
-
-            // set reward destination instead of relying on the default
-            ledger.reward_destination = RewardDestination::BeneficiaryBalance;
-
-            // update ledger
-            Ledger::<T>::insert(&original_staker, ledger);
-
             // Withdraw reward funds from the dapps staking pot
             let reward_imbalance = T::Currency::withdraw(
                 &Self::account_id(),
@@ -976,14 +1016,40 @@ pub mod pallet {
                 ExistenceRequirement::AllowDeath,
             )?;
 
-            // check if target is already a beneficiary, no need to emit an error if it's found, we simply add the reward to the existing beneficiary and if it's not found we add it as a new beneficiary
+            // Check if target is already a beneficiary, no need to emit an error if it's found, we simply add the reward to the existing beneficiary and if it's not found we add it as a new beneficiary
             if beneficiary_info.is_none() {
+                // ensure we havn't reached the maximum number of beneficiaries
+                ensure!(
+                    (list_of_beneficiaries.len() as u32)
+                        < T::MaxNumberOfBeneficiariesPerStaker::get(),
+                    Error::<T>::MaxBeneficiariesReached,
+                );
+
+                // Check if we really don't have the beneficiary
+                ensure!(
+                    list_of_beneficiaries
+                        .iter()
+                        .find(|x| x.account == target)
+                        .is_none(),
+                    Error::<T>::BeneficiaryAlreadyExists
+                );
+
                 // add the new beneficiary
-                let new_beneficiary: RewardBeneficiary<T::AccountId, BalanceOf<T>> =
+                let new_beneficiary: RewardBeneficiary<T::SmartContract, BalanceOf<T>> =
                     RewardBeneficiary {
-                        next: EmbededDestination::None,
+                        active: true,
                         amount: staker_reward,
+                        contract_id: SmartContractAddress::Address(contract_id.clone()),
                     };
+
+                // add the new beneficiary to the staker's beneficiaries
+                StakerBeneficiaries::<T>::mutate(&original_staker, |beneficiaries| {
+                    beneficiaries.push(BeneficiaryInfo {
+                        account: target.clone(),
+                        active: true,
+                    })
+                });
+
                 // transfer reward to the beneficiary
                 T::Currency::resolve_creating(&target, reward_imbalance);
                 RewardBeneficiaries::<T>::insert(&original_staker, &target, new_beneficiary);
@@ -995,62 +1061,83 @@ pub mod pallet {
                     target,
                 ))
             } else {
+                // if it's found we check if it's active and if it's the same smart contract
+                ensure!(
+                    beneficiary_info
+                        .clone()
+                        .expect("beneficiary is not found")
+                        .contract_id
+                        == SmartContractAddress::Address(contract_id.clone()),
+                    Error::<T>::InvalidBeneficiary
+                );
+
+                // ensure the beneficiary is active for receiving rewards
+                ensure!(
+                    beneficiary_info
+                        .clone()
+                        .expect("beneficiary is not found")
+                        .active,
+                    Error::<T>::BeneficiaryNotActive
+                );
+
+                ensure!(
+                    list_of_beneficiaries
+                        .iter()
+                        .find(|x| x.active == true)
+                        .is_some(),
+                    Error::<T>::BeneficiaryNotActive
+                );
+
+                // Check if we really do have the beneficiary
+                ensure!(
+                    list_of_beneficiaries
+                        .iter()
+                        .find(|x| x.account != target)
+                        .is_none(),
+                    Error::<T>::BeneficiaryNotFound
+                );
+
                 // update the existing beneficiary
 
-                // this is for mutating the beneficiary info
                 // unwrap is safe because we checked if it's none before
-                let b_info = beneficiary_info.clone().unwrap();
+                let mut beneficiary = beneficiary_info.unwrap();
+                beneficiary.amount += staker_reward;
 
-                // check if the beneficiary has delegated to another account, if it exists we add the reward to the second delegated account
-                if let EmbededDestination::Destination {
-                    ref who,
-                    mut amount,
-                } = b_info.next
-                {
-                    // let stuff = *who.clone();
-                    // if the beneficiary has delegated to another account, we add the reward to the delegated account i.e ALICE(staker) -> BOB(first beneficiary) -> CAROL(second beneficiary)
+                // transfer reward to the beneficiary
+                T::Currency::resolve_creating(&target, reward_imbalance);
 
-                    // transfer reward to the beneficiary
-                    T::Currency::resolve_creating(&who, reward_imbalance);
-                    // update the beneficiary info
-                    amount += staker_reward;
+                RewardBeneficiaries::<T>::insert(&original_staker, &target, beneficiary);
 
-                    Self::deposit_event(Event::<T>::ClaimRewardsAndDepositToBeneficiary(
-                        original_staker.clone(),
-                        contract_id.clone(),
-                        era.clone(),
-                        staker_reward.clone(),
-                        who.clone(),
-                    ));
-                    RewardBeneficiaries::<T>::insert(&original_staker, &target, b_info);
-                } else {
-                    // unwrap is safe because we checked if it's none before
-                    let mut beneficiary = beneficiary_info.unwrap();
-                    beneficiary.amount += staker_reward;
-                    // transfer reward to the beneficiary
-                    T::Currency::resolve_creating(&target, reward_imbalance);
-
-                    RewardBeneficiaries::<T>::insert(&original_staker, &target, beneficiary);
-
-                    Self::deposit_event(Event::<T>::ClaimRewardsAndDepositToBeneficiary(
-                        original_staker.clone(),
-                        contract_id.clone(),
-                        era.clone(),
-                        staker_reward.clone(),
-                        target,
-                    ));
-                }
+                Self::deposit_event(Event::<T>::ClaimRewardsAndDepositToBeneficiary(
+                    original_staker.clone(),
+                    contract_id.clone(),
+                    era.clone(),
+                    staker_reward.clone(),
+                    target,
+                ));
             }
 
+            // set reward destination instead of relying on the default
+            let mut ledger = Self::ledger(&original_staker);
+            ledger.reward_destination = RewardDestination::BeneficiaryBalance;
+
+            // update ledger
+            Ledger::<T>::insert(&original_staker, ledger);
             Self::update_staker_info(&original_staker, &contract_id, staker_info);
             Ok(())
         }
 
+        /// Transfer rewards to a new beneficiary and register a new beneficiary
+        /// Using this illustration: ALICE -> BOB -> CAROL
+        /// The contract id is move to CAROL's Records, once BOB delegates to CAROL, CAROL can claim rewards for BOB, the rewards will be sent to CAROL's account, bob becomes inactive and CAROL becomes active
+        /// `origin` - The first beneficiary, BOB
+        /// `original_staker` - The original staker, ALICE
+        /// `target` - The new beneficiary, CAROL
+        /// We need the original staker in order to get the beneficiary info
         #[pallet::weight(0)]
         pub fn deposit_rewards_to_second_beneficiary_and_register_second_beneficiary(
             origin: OriginFor<T>,
             original_staker: T::AccountId,
-            contract_id: T::SmartContract,
             target: T::AccountId,
         ) -> DispatchResult {
             // ensure pallet is enabled
@@ -1064,65 +1151,249 @@ pub mod pallet {
             );
 
             // ensure beneficiary info exists
-            let beneficiary_info = Self::reward_beneficiaries(&original_staker, &first_beneficiary);
-            ensure!(beneficiary_info.is_some(), Error::<T>::BeneficiaryNotFound);
+            let mut beneficiary_info =
+                Self::reward_beneficiaries(&original_staker, &first_beneficiary)
+                    .expect("Beneficiary doesn't exist");
 
-            // Ensure we have something to claim
-            let mut staker_info = Self::staker_info(&original_staker, &contract_id);
-            let (era, staked) = staker_info.claim();
-            ensure!(staked > Zero::zero(), Error::<T>::NotStakedContract);
+            // ensure staker hasn't reached the maximum number of beneficiaries
+            ensure!(
+                (StakerBeneficiaries::<T>::get(&original_staker).len() as u32)
+                    < T::MaxNumberOfBeneficiariesPerStaker::get(),
+                Error::<T>::MaxBeneficiariesReached
+            );
 
-            let dapp_info =
-                RegisteredDapps::<T>::get(&contract_id).ok_or(Error::<T>::NotOperatedContract)?;
+            let new_info = RewardBeneficiary {
+                active: true,
+                amount: beneficiary_info.amount,
+                contract_id: beneficiary_info.clone().contract_id,
+            };
 
-            if let DAppState::Unregistered(unregister_era) = dapp_info.state {
-                ensure!(era < unregister_era, Error::<T>::NotOperatedContract);
-            }
-
-            // check era is valid
-            let current_era = Self::current_era();
-            ensure!(era < current_era, Error::<T>::EraOutOfBounds);
-
-            // keep beneficiary info for later
-            let beneficiary_info = Self::reward_beneficiaries(&original_staker, &target);
-
-            //  validating staker's info to cash out rewards
-            let staking_info = Self::contract_stake_info(&contract_id, era).unwrap_or_default();
-            let reward_and_stake =
-                Self::general_era_info(era).ok_or(Error::<T>::UnknownEraReward)?;
-
-            let (_, stakers_joint_reward) =
-                Self::dev_stakers_split(&staking_info, &reward_and_stake);
-            let staker_reward =
-                Perbill::from_rational(staked, staking_info.total) * stakers_joint_reward;
-
-            // Withdraw reward funds from the dapps staking pot
-            let reward_imbalance = T::Currency::withdraw(
-                &Self::account_id(),
-                staker_reward.clone(),
-                WithdrawReasons::TRANSFER,
+            T::Currency::transfer(
+                &first_beneficiary,
+                &target,
+                beneficiary_info.amount,
                 ExistenceRequirement::AllowDeath,
             )?;
 
-            if beneficiary_info.is_some() {
-                let mut b_info = beneficiary_info.clone().unwrap();
+            let mut ledger = Self::ledger(&original_staker);
+            ledger.reward_destination = RewardDestination::BeneficiaryBalance;
 
-                ensure!(
-                    b_info.next == EmbededDestination::None,
-                    Error::<T>::BeneficiaryAlreadyHasSecondBeneficiary
-                );
+            // update ledger
+            Ledger::<T>::insert(&original_staker, ledger);
 
-                b_info.next = EmbededDestination::Destination {
-                    who: target.clone(),
-                    amount: staker_reward,
-                };
+            // add the new beneficiary to the staker's beneficiaries
+            StakerBeneficiaries::<T>::mutate(&original_staker, |beneficiaries| {
+                beneficiaries.push(BeneficiaryInfo {
+                    account: target.clone(),
+                    active: true,
+                });
+            });
 
-                T::Currency::resolve_creating(&target, reward_imbalance);
-                RewardBeneficiaries::<T>::insert(&original_staker, &target, b_info);
-            }
+            RewardBeneficiaries::<T>::insert(&original_staker, &target, new_info);
+
+            Self::deposit_event(Event::<T>::TransferRewardsToDelegatedAccount(
+                first_beneficiary.clone(),
+                beneficiary_info.amount,
+                target,
+            ));
+
+            beneficiary_info.amount = BalanceOf::<T>::zero();
+            beneficiary_info.contract_id = SmartContractAddress::None;
+            beneficiary_info.active = false;
+
+            RewardBeneficiaries::<T>::insert(
+                &original_staker,
+                &first_beneficiary,
+                beneficiary_info,
+            );
 
             Ok(())
         }
+
+        /// Transfer rewards to a new beneficiary and register a new beneficiary, this is done by ALICE
+        /// ALICE decides to make BOB inactive and CAROL active and also transfer the rewards to CAROL
+        /// `origin` - The original staker, ALICE
+        /// `old_beneficiary` - The first beneficiary, BOB
+        /// `new_beneficiary` - The new beneficiary, CAROL
+        #[pallet::weight(0)]
+        pub fn change_beneficiary(
+            origin: OriginFor<T>,
+            old_beneficiary: T::AccountId,
+            new_beneficiary: T::AccountId,
+        ) -> DispatchResult {
+            // ensure pallet is enabled
+            Self::ensure_pallet_enabled()?;
+
+            // ensure staker is valid
+            let staker = ensure_signed(origin)?;
+            ensure!(
+                Ledger::<T>::contains_key(&staker),
+                Error::<T>::InvalidStaker
+            );
+
+            // ensure the old beneficiary is valid
+            ensure!(
+                RewardBeneficiaries::<T>::contains_key(&staker, &old_beneficiary),
+                Error::<T>::BeneficiaryNotFound
+            );
+
+            // ensure we don't have the new beneficiary already
+            ensure!(
+                !RewardBeneficiaries::<T>::contains_key(&staker, &new_beneficiary),
+                Error::<T>::BeneficiaryAlreadyExists
+            );
+
+            ensure!(
+                !StakerBeneficiaries::<T>::get(&staker)
+                    .iter()
+                    .any(|beneficiary| beneficiary.account == new_beneficiary),
+                Error::<T>::BeneficiaryAlreadyExists
+            );
+
+            // ensure beneficiary info exists
+            let mut beneficiary_info = Self::reward_beneficiaries(&staker, &old_beneficiary)
+                .expect("Beneficiary doesn't exist");
+
+            let mut list_of_beneficiaries: Vec<BeneficiaryInfo<T::AccountId>> =
+                Self::staker_beneficiaries(&staker);
+
+            // ensure staker hasn't reached the maximum number of beneficiaries
+            ensure!(
+                (list_of_beneficiaries.clone().len() as u32)
+                    < T::MaxNumberOfBeneficiariesPerStaker::get(),
+                Error::<T>::MaxBeneficiariesReached
+            );
+
+            let new_info = RewardBeneficiary {
+                active: true,
+                amount: beneficiary_info.amount,
+                contract_id: beneficiary_info.clone().contract_id,
+            };
+
+            // transfer reward to the new beneficiary
+            T::Currency::transfer(
+                &old_beneficiary,
+                &new_beneficiary,
+                beneficiary_info.amount,
+                ExistenceRequirement::AllowDeath,
+            )?;
+
+            // strip the old beneficiary
+            beneficiary_info.amount = BalanceOf::<T>::zero();
+            beneficiary_info.contract_id = SmartContractAddress::None;
+            beneficiary_info.active = false;
+
+            let new_b_info = BeneficiaryInfo {
+                account: new_beneficiary.clone(),
+                active: true,
+            };
+
+            // add the new beneficiary to the staker's beneficiaries
+            list_of_beneficiaries.push(new_b_info);
+
+            StakerBeneficiaries::<T>::insert(&staker, list_of_beneficiaries);
+
+            // update the old beneficiary
+            StakerBeneficiaries::<T>::mutate(&staker, |maybe_value| {
+                maybe_value
+                    .iter()
+                    .position(|x| x.account == old_beneficiary)
+                    .map(|i| {
+                        maybe_value[i].active = false;
+                    });
+            });
+
+            RewardBeneficiaries::<T>::insert(&staker, &old_beneficiary, beneficiary_info);
+
+            // update ledger
+            let mut ledger = Self::ledger(&staker);
+            ledger.reward_destination = RewardDestination::BeneficiaryBalance;
+            Ledger::<T>::insert(&staker, ledger);
+
+            // add the new beneficiary to storage
+            RewardBeneficiaries::<T>::insert(&staker, &new_beneficiary, new_info);
+
+            Self::deposit_event(Event::<T>::ReplaceBeneficiary(
+                staker,
+                old_beneficiary,
+                new_beneficiary,
+            ));
+
+            Ok(())
+        }
+
+        /// Transfer the rewards deposited into a beneficiary back to the staker
+        /// `origin` - The original staker
+        /// `beneficiary` - The beneficiary
+        #[pallet::weight(0)]
+        pub fn reset_rewards_deposited_into_beneficiary_back_to_staker(
+            origin: OriginFor<T>,
+            beneficiary: T::AccountId,
+        ) -> DispatchResult {
+            // ensure pallet is enabled
+            Self::ensure_pallet_enabled()?;
+
+            // ensure staker and beneficiary are valid
+            let staker = ensure_signed(origin)?;
+            ensure!(
+                Ledger::<T>::contains_key(&staker),
+                Error::<T>::InvalidStaker
+            );
+
+            // Ensure beneficiary info exists
+            let mut beneficiary_info = Self::reward_beneficiaries(&staker, &beneficiary)
+                .expect("Beneficiary doesn't exist");
+
+            let list_of_beneficiaries = StakerBeneficiaries::<T>::get(&staker);
+
+            ensure!(
+                list_of_beneficiaries
+                    .iter()
+                    .any(|x| x.account == beneficiary),
+                Error::<T>::BeneficiaryNotFound
+            );
+
+            // transfer reward to the staker
+            T::Currency::transfer(
+                &beneficiary,
+                &staker,
+                beneficiary_info.amount,
+                ExistenceRequirement::AllowDeath,
+            )?;
+
+            // update ledger
+            let mut ledger = Self::ledger(&staker);
+            ledger.reward_destination = RewardDestination::FreeBalance;
+            Ledger::<T>::insert(&staker, ledger);
+
+            Self::deposit_event(Event::<T>::ResetStashLocation(
+                staker.clone(),
+                beneficiary_info.amount,
+                beneficiary.clone(),
+            ));
+
+            // update beneficiary info
+            beneficiary_info.amount = BalanceOf::<T>::zero();
+            beneficiary_info.contract_id = SmartContractAddress::None;
+            beneficiary_info.active = false;
+
+            StakerBeneficiaries::<T>::mutate(&staker, |maybe_value| {
+                maybe_value
+                    .iter()
+                    .position(|x| x.account == beneficiary)
+                    .map(|i| {
+                        maybe_value[i].active = false;
+                    });
+            });
+
+            RewardBeneficiaries::<T>::insert(&staker, &beneficiary, beneficiary_info);
+
+            Ok(())
+        }
+
+        /////////// END OF NEW CHANGES ////////////
+
+        // TODO: when you add a new beneficiary, also update the staker's list of beneficiaries
 
         /// Force a new era at the start of the next block.
         ///

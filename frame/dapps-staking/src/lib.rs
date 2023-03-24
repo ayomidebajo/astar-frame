@@ -190,7 +190,7 @@ impl Default for Version {
 
 /// Used to represent how much was staked in a particular era.
 /// E.g. `{staked: 1000, era: 5}` means that in era `5`, staked amount was 1000.
-#[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+#[derive(Encode, Decode, Default, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct EraStake<Balance: AtLeast32BitUnsigned + Copy> {
     /// Staked amount in era
     #[codec(compact)]
@@ -238,9 +238,11 @@ impl<Balance: AtLeast32BitUnsigned + Copy> EraStake<Balance> {
 pub struct StakerInfo<Balance: AtLeast32BitUnsigned + Copy> {
     // Size of this list would be limited by a configurable constant
     stakes: Vec<EraStake<Balance>>,
+    // Size of this list would be limited by a configurable constant
+    // pub beneficiaries: Vec<BeneficiaryInfo<AccountId, Balance>>,
 }
 
-impl<Balance: AtLeast32BitUnsigned + Copy> StakerInfo<Balance> {
+impl<Balance: AtLeast32BitUnsigned + Copy + Default> StakerInfo<Balance> {
     /// `true` if no active stakes and unclaimed eras exist, `false` otherwise
     fn is_empty(&self) -> bool {
         self.stakes.is_empty()
@@ -495,7 +497,7 @@ pub enum RewardDestination {
     /// on the contract from which the reward was received.
     StakeBalance,
     /// Rewards are deposited into a delegated beneficiary account.
-    BeneficiaryBalance
+    BeneficiaryBalance,
 }
 
 impl Default for RewardDestination {
@@ -514,16 +516,65 @@ pub enum EmbededDestination<AccountId, Balance: AtLeast32BitUnsigned + Default +
     },
 }
 
+#[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+
+pub enum SmartContractAddress<SmartContract> {
+    #[default]
+    None,
+    Address(SmartContract),
+}
+
+#[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+
+pub enum DelegatedAddress<AccountId> {
+    #[default]
+    None,
+    Address(AccountId),
+}
+
 /// contains information about each beneficiary for a particular staker
 #[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
 
-pub struct RewardBeneficiary<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
-    /// next reward destination
-    pub next: EmbededDestination<AccountId, Balance>,
+pub struct RewardBeneficiary<SmartContract, Balance: AtLeast32BitUnsigned + Default + Copy> {
     /// Amount of rewards deposited.
     #[codec(compact)]
     pub amount: Balance,
+    // smart contract the staker was awarded from after staking on the contract
+    pub contract_id: SmartContractAddress<SmartContract>,
+    // indicates whether the beneficiary is active or not
+    pub active: bool,
 }
+
+#[derive(Clone, PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
+pub struct BeneficiaryInfo<AccountId> {
+    pub account: AccountId,
+    pub active: bool,
+}
+
+// #[derive(Clone, PartialEq, Eq, Encode, Default, Decode, RuntimeDebug, TypeInfo)]
+
+// pub struct Beneficiaries<AccountId> {
+//     pub list_of_beneficiaries: Vec<AccountOfBeneficiary<AccountId>>,
+// }
+
+// #[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
+
+// pub struct BeneficiaryInfo<SmartContract, AccountId, Balance: AtLeast32BitUnsigned + Copy + Default>
+// {
+//     /// staker account address
+//     pub staker: AccountId,
+//     // indicates whether the beneficiary is active or not
+//     pub active: bool,
+//     //beneficiary account address
+//     pub beneficiary_account: AccountId,
+//     /// Amount of rewards deposited into the beneficiary account.
+//     #[codec(compact)]
+//     pub amount: Balance,
+//     // smart contract the staker was awarded from after staking on the contract
+//     pub contract_id: SmartContractAddress<SmartContract>,
+//     // delegated account address
+//     pub delegated_beneficiary: DelegatedAddress<AccountId>,
+// }
 
 /// Contains information about account's locked & unbonding balances.
 #[derive(Clone, PartialEq, Encode, Decode, Default, RuntimeDebug, TypeInfo)]

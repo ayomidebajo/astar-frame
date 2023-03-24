@@ -370,12 +370,19 @@ pub mod pallet {
         NotActiveStaker,
         /// Transfering nomination to the same contract
         NominationTransferToSameContract,
+        /// Invalid staker
         InvalidStaker,
+        /// Max number of beneficiaries reached
         MaxBeneficiariesReached,
+        /// Beneficiary already exists for this staker
         BeneficiaryAlreadyExists,
+        /// Beneficiary not found
         BeneficiaryNotFound,
+        /// Beneficiary already has a second beneficiary
         BeneficiaryAlreadyHasSecondBeneficiary,
+        /// Wrong beneficiary for this staker
         InvalidBeneficiary,
+        /// Beneficiary is not active 
         BeneficiaryNotActive,
     }
 

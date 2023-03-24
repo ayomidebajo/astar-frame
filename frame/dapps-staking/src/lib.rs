@@ -551,31 +551,6 @@ pub struct BeneficiaryInfo<AccountId> {
     pub active: bool,
 }
 
-// #[derive(Clone, PartialEq, Eq, Encode, Default, Decode, RuntimeDebug, TypeInfo)]
-
-// pub struct Beneficiaries<AccountId> {
-//     pub list_of_beneficiaries: Vec<AccountOfBeneficiary<AccountId>>,
-// }
-
-// #[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
-
-// pub struct BeneficiaryInfo<SmartContract, AccountId, Balance: AtLeast32BitUnsigned + Copy + Default>
-// {
-//     /// staker account address
-//     pub staker: AccountId,
-//     // indicates whether the beneficiary is active or not
-//     pub active: bool,
-//     //beneficiary account address
-//     pub beneficiary_account: AccountId,
-//     /// Amount of rewards deposited into the beneficiary account.
-//     #[codec(compact)]
-//     pub amount: Balance,
-//     // smart contract the staker was awarded from after staking on the contract
-//     pub contract_id: SmartContractAddress<SmartContract>,
-//     // delegated account address
-//     pub delegated_beneficiary: DelegatedAddress<AccountId>,
-// }
-
 /// Contains information about account's locked & unbonding balances.
 #[derive(Clone, PartialEq, Encode, Decode, Default, RuntimeDebug, TypeInfo)]
 pub struct AccountLedger<Balance: AtLeast32BitUnsigned + Default + Copy> {

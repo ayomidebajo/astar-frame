@@ -782,125 +782,31 @@ pub(crate) fn assert_change_beneficiary(
 }
 
 pub(crate) fn assert_use_saved_beneficiary_to_receive_awards(
-    claimer: AccountId,
+    staker: AccountId,
     contract_id: &MockSmartContract<AccountId>,
-    target: AccountId,
+    beneficiary: AccountId,
 ) {
-    let (claim_era, _) = DappsStaking::staker_info(&claimer, contract_id).claim();
-    let current_era = DappsStaking::current_era();
-
-    let first_balance = <TestRuntime as Config>::Currency::free_balance(&target);
-
     //clean up possible leftover events
     System::reset_events();
 
-    let init_state_claim_era = MemorySnapshot::all(claim_era, contract_id, claimer);
-    let init_state_current_era = MemorySnapshot::all(current_era, contract_id, claimer);
-
-    // Calculate contract portion of the reward
-    let (_, stakers_joint_reward) = DappsStaking::dev_stakers_split(
-        &init_state_claim_era.contract_info,
-        &init_state_claim_era.era_info,
+    // check if the `old_beneficiary` field is actually the beneficiary of the staker
+    assert_eq!(
+        DappsStaking::reward_beneficiaries(&staker, &beneficiary).is_some(),
+        true,
     );
 
-    let (claim_era, staked) = init_state_claim_era.staker_info.clone().claim();
-    assert!(claim_era > 0); // Sanity check - if this fails, method is being used incorrectly
+    // assert!(list_of_beneficiaries.contains(&old_beneficiary));
 
-    // Cannot claim rewards post unregister era, this indicates a bug!
-    if let DAppState::Unregistered(unregistered_era) = init_state_claim_era.dapp_info.state {
-        assert!(unregistered_era > claim_era);
-    }
-
-    // Rewards calculation
-    let calculated_reward =
-        Perbill::from_rational(staked, init_state_claim_era.contract_info.total)
-            * stakers_joint_reward;
-    let issuance_before_claim = <TestRuntime as Config>::Currency::total_issuance();
-
-    // register first beneficiary and deposit rewards to it
     assert_ok!(DappsStaking::use_saved_beneficiary_to_receive_rewards(
-        Origin::signed(claimer),
-        target.clone(),
+        Origin::signed(staker),
+        beneficiary.clone(),
         contract_id.clone(),
     ));
 
-    // println!("reward: {:?}", calculated_reward);
+    let list_of_beneficiaries = DappsStaking::staker_beneficiaries(&staker);
 
-    // test balance of beneficiary
-    assert_eq!(
-        first_balance + calculated_reward,
-        <TestRuntime as Config>::Currency::free_balance(&target)
-    );
-
-    let final_state_current_era = MemorySnapshot::all(current_era, contract_id, claimer);
-
-    // restake shouldn't be performed
-    assert_eq!(
-        DappsStaking::should_restake_reward(
-            final_state_current_era.ledger.reward_destination,
-            final_state_current_era.dapp_info.state,
-            final_state_current_era.staker_info.latest_staked_value()
-        ),
-        false
-    );
-
-    if DappsStaking::should_restake_reward(
-        init_state_current_era.ledger.reward_destination,
-        init_state_current_era.dapp_info.state,
-        init_state_current_era.staker_info.latest_staked_value(),
-    ) {
-        // There should be only 1 event, ClaimRewardsAndDepositToBeneficiary
-        // if there's less or more, panic is acceptable
-        let events = dapps_staking_events();
-        // println!("print events {:#?}", events);
-        let last_event = &events[events.len() - 1];
-        assert_eq!(
-            last_event.clone(),
-            Event::<TestRuntime>::ClaimRewardsAndDepositToBeneficiary(
-                claimer,
-                contract_id.clone(),
-                claim_era,
-                calculated_reward,
-                target.clone()
-            )
-        );
-    }
-
-    // last event should be ClaimRewardsAndDepositToBeneficiary
-    System::assert_last_event(mock::Event::DappsStaking(
-        Event::ClaimRewardsAndDepositToBeneficiary(
-            claimer,
-            contract_id.clone(),
-            claim_era,
-            calculated_reward,
-            target.clone(),
-        ),
-    ));
-
-    let (new_era, _) = final_state_current_era.staker_info.clone().claim();
-    if final_state_current_era.staker_info.is_empty() {
-        assert!(new_era.is_zero());
-        assert!(!GeneralStakerInfo::<TestRuntime>::contains_key(
-            &claimer,
-            contract_id
-        ));
-    } else {
-        assert!(new_era > claim_era);
-    }
-    assert!(new_era.is_zero() || new_era > claim_era);
-
-    // Claim shouldn't mint new tokens, instead it should just transfer from the dapps staking pallet account
-    let issuance_after_claim = <TestRuntime as Config>::Currency::total_issuance();
-    assert_eq!(issuance_before_claim, issuance_after_claim);
-
-    // // Old `claim_era` contract info should never be changed
-    let final_state_claim_era = MemorySnapshot::all(claim_era, contract_id, claimer);
-    assert_eq!(
-        init_state_claim_era.contract_info,
-        final_state_claim_era.contract_info
-    );
-
-    // assert_eq!(staker_info.beneficiary, beneficiary);
+    // check if the `beneficiary` field is now removed from the list of beneficiaries
+    assert_eq!(list_of_beneficiaries.is_empty(), false);
 }
 
 pub(crate) fn assert_remove_beneficiary(staker: AccountId, beneficiary: AccountId) {

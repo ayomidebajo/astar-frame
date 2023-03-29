@@ -244,7 +244,7 @@ benchmarks! {
         DappsStaking::<T>::set_reward_destination(RawOrigin::Signed(staker.clone()).into(), RewardDestination::StakeBalance)?;
         advance_to_era::<T>(claim_era + 1u32);
 
-    }: claim_staker(RawOrigin::Signed(staker.clone()), contract_id.clone())
+    }: claim_staker(RawOrigin::Signed(staker.clone()), contract_id.clone(), None)
     verify {
         let mut staker_info = DappsStaking::<T>::staker_info(&staker, &contract_id);
         let (era, _) = staker_info.claim();
@@ -263,7 +263,7 @@ benchmarks! {
         DappsStaking::<T>::set_reward_destination(RawOrigin::Signed(staker.clone()).into(), RewardDestination::FreeBalance)?;
         advance_to_era::<T>(claim_era + 1u32);
 
-    }: claim_staker(RawOrigin::Signed(staker.clone()), contract_id.clone())
+    }: claim_staker(RawOrigin::Signed(staker.clone()), contract_id.clone(), None)
     verify {
         let mut staker_info = DappsStaking::<T>::staker_info(&staker, &contract_id);
         let (era, _) = staker_info.claim();

@@ -545,6 +545,17 @@ pub struct RewardBeneficiary<SmartContract, Balance: AtLeast32BitUnsigned + Defa
     pub active: bool,
 }
 
+#[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
+pub struct BeneficiaryReward<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
+    /// Amount of rewards deposited.
+    #[codec(compact)]
+    pub amount: Balance,
+
+    pub account: AccountId,
+    // indicates whether the beneficiary is active or not
+    // pub active: bool,
+}
+
 #[derive(Clone, PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub struct BeneficiaryInfo<AccountId> {
     pub account: AccountId,
@@ -552,7 +563,7 @@ pub struct BeneficiaryInfo<AccountId> {
 }
 
 /// Contains information about account's locked & unbonding balances.
-#[derive(Clone, PartialEq, Encode, Decode, Default, RuntimeDebug, TypeInfo)]
+#[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub struct AccountLedger<Balance: AtLeast32BitUnsigned + Default + Copy> {
     /// Total balance locked.
     #[codec(compact)]
@@ -561,6 +572,16 @@ pub struct AccountLedger<Balance: AtLeast32BitUnsigned + Default + Copy> {
     unbonding_info: UnbondingInfo<Balance>,
     /// Instruction on how to handle reward payout
     reward_destination: RewardDestination,
+}
+
+impl<Balance: AtLeast32BitUnsigned + Default + Copy> Default for AccountLedger<Balance> {
+    fn default() -> Self {
+        AccountLedger {
+            locked: Balance::default(),
+            unbonding_info: UnbondingInfo::default(),
+            reward_destination: RewardDestination::default(),
+        }
+    }
 }
 
 impl<Balance: AtLeast32BitUnsigned + Default + Copy> AccountLedger<Balance> {

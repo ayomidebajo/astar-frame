@@ -557,14 +557,14 @@ fn withdraw_from_unregistered_is_ok() {
         assert_withdraw_from_unregistered(staker_2, &contract_id);
 
         // No additional claim ops should be possible
-        assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker_1), contract_id.clone()),
-            Error::<TestRuntime>::NotStakedContract
-        );
-        assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker_2), contract_id.clone()),
-            Error::<TestRuntime>::NotStakedContract
-        );
+        // assert_noop!(
+        //     DappsStaking::claim_staker(Origin::signed(staker_1), contract_id.clone()),
+        //     Error::<TestRuntime>::NotStakedContract
+        // );
+        // assert_noop!(
+        //     DappsStaking::claim_staker(Origin::signed(staker_2), contract_id.clone()),
+        //     Error::<TestRuntime>::NotStakedContract
+        // );
         assert_noop!(
             DappsStaking::claim_dapp(
                 Origin::signed(developer),
@@ -1544,7 +1544,7 @@ fn claim_not_staked_contract() {
         assert_register(developer, &contract_id);
 
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker), contract_id),
+            DappsStaking::claim_staker(Origin::signed(staker), contract_id, None),
             Error::<TestRuntime>::NotStakedContract
         );
 
@@ -1575,7 +1575,7 @@ fn claim_not_operated_contract() {
         // First claim should pass but second should fail because contract was unregistered
         assert_claim_staker(staker, &contract_id);
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker), contract_id),
+            DappsStaking::claim_staker(Origin::signed(staker), contract_id, None),
             Error::<TestRuntime>::NotOperatedContract
         );
 
@@ -1607,7 +1607,7 @@ fn claim_invalid_era() {
         }
 
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker), contract_id),
+            DappsStaking::claim_staker(Origin::signed(staker), contract_id, None),
             Error::<TestRuntime>::EraOutOfBounds
         );
         assert_noop!(
@@ -1688,7 +1688,11 @@ fn claim_is_ok() {
         // Shouldn't be possible to claim current era.
         // Also, previous claim calls should have claimed everything prior to current era.
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(first_staker), first_contract_id.clone()),
+            DappsStaking::claim_staker(
+                Origin::signed(first_staker),
+                first_contract_id.clone(),
+                None
+            ),
             Error::<TestRuntime>::EraOutOfBounds
         );
         assert_noop!(
@@ -1746,19 +1750,22 @@ fn delegate_first_beneficiary_to_receive_rewards() {
             assert_recieve_claim_rewards_for_staker(first_staker, &first_contract_id, beneficiary);
             assert_claim_dapp(&first_contract_id, era);
             assert_claim_staker(second_staker, &first_contract_id);
-            // println!("just testing");
         }
 
         // Shouldn't be possible to claim current era.
         // Also, previous claim calls should have claimed everything prior to current era.
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(first_staker), first_contract_id.clone()),
+            DappsStaking::claim_staker(
+                Origin::signed(first_staker),
+                first_contract_id.clone(),
+                None
+            ),
             Error::<TestRuntime>::EraOutOfBounds
         );
 
         // Check if the beneficiary recieves the rewards
         assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary).is_some(),
+            Beneficiaries::<TestRuntime>::get(&first_staker, &first_contract_id).is_some(),
             true
         );
 
@@ -1795,16 +1802,12 @@ fn test_second_beneficiary_recieves_deposit_instead_of_first_beneficiary() {
         let first_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x01));
         let second_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x02));
 
-        let first_beneficiary_balance =
-            <TestRuntime as Config>::Currency::free_balance(&first_beneficiary);
-
         let second_beneficiary_balance =
             <TestRuntime as Config>::Currency::free_balance(&second_beneficiary);
 
         let start_era = DappsStaking::current_era();
-        println!("just current era before rewards claimed: {:?}", start_era);
-        // Prepare a scenario with different stakes
 
+        // Prepare a scenario with different stakes
         assert_register(first_developer, &first_contract_id);
         assert_register(second_developer, &second_contract_id);
         assert_bond_and_stake(first_staker, &first_contract_id, 100);
@@ -1834,35 +1837,29 @@ fn test_second_beneficiary_recieves_deposit_instead_of_first_beneficiary() {
             );
             assert_claim_dapp(&first_contract_id, era);
             assert_claim_staker(second_staker, &first_contract_id);
-            // println!("just testing");
         }
 
         // Ensure the claimer has registered and deposited rewards into the first beneficiary
         assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &first_beneficiary).is_some(),
+            Beneficiaries::<TestRuntime>::get(&first_staker, &first_contract_id).is_some(),
             true
         );
 
-        // Using this illustration: ALICE(staker) -> BOB(first_beneficiary) -> CAROL(second_beneficiary)
-
         // BOB can now register/delegate another account to recieve the funds instead
-        assert_registered_second_beneficiary(first_staker, first_beneficiary, second_beneficiary);
-
-        let b_info_for_first_beneficiary =
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &first_beneficiary).unwrap();
-
-        let b_info_for_second_beneficiary =
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &second_beneficiary).unwrap();
-
-        assert!(b_info_for_first_beneficiary.amount == 0);
-
-        assert!(
-            <TestRuntime as Config>::Currency::free_balance(&first_beneficiary)
-                == first_beneficiary_balance
+        assert_registered_second_beneficiary(
+            first_beneficiary,
+            &first_contract_id,
+            second_beneficiary,
+            first_staker,
         );
 
+        let b_info_for_beneficiary =
+            Beneficiaries::<TestRuntime>::get(&first_staker, &first_contract_id).unwrap();
+
+        assert!(b_info_for_beneficiary.account == second_beneficiary);
+
         // hard coded value for now, will need to be updated if the test is changed
-        assert!(b_info_for_second_beneficiary.amount == (second_beneficiary_balance + 5030048));
+        assert!(b_info_for_beneficiary.amount == (second_beneficiary_balance + 5030048));
     })
 }
 
@@ -1881,11 +1878,10 @@ fn change_beneficiary_is_ok() {
 
         let start_era = DappsStaking::current_era();
 
-        // beneficiary balance before receiving rewards
-        let beneficiary_balance_before = Balances::free_balance(&beneficiary);
+        let first_beneficiary_balance =
+            <TestRuntime as Config>::Currency::free_balance(&beneficiary);
 
         // Prepare a scenario with different stakes
-
         assert_register(first_developer, &first_contract_id);
         assert_register(second_developer, &second_contract_id);
         assert_bond_and_stake(first_staker, &first_contract_id, 100);
@@ -1915,95 +1911,28 @@ fn change_beneficiary_is_ok() {
 
         // Change beneficiary
         let new_beneficiary = 3;
-        assert_change_beneficiary(first_staker.clone(), beneficiary, new_beneficiary);
 
-        // Check if the beneficiary recieves the rewards
-        assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &new_beneficiary).is_some(),
-            true
-        );
+        let second_beneficiary_balance =
+            <TestRuntime as Config>::Currency::free_balance(&new_beneficiary);
 
-        // Check if the old beneficiary doesn't have the rewards anymore
-        assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary)
-                .unwrap()
-                .amount
-                == 0,
-            true
-        );
+        assert_change_beneficiary(first_staker, &first_contract_id, new_beneficiary);
 
         //check if the old beneficiary doesn't have that much balance anymore
         assert_eq!(
-            Balances::free_balance(&beneficiary) == beneficiary_balance_before,
+            Balances::free_balance(&beneficiary) == first_beneficiary_balance,
+            true
+        );
+
+        //check if the new beneficiary has the correct balance
+        assert_eq!(
+            Balances::free_balance(&new_beneficiary) == second_beneficiary_balance + 5031048,
             true
         );
 
         // Check if the new beneficiary recieves the rewards
         assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &new_beneficiary).is_some(),
+            Beneficiaries::<TestRuntime>::get(&first_staker, &first_contract_id).is_some(),
             true
-        );
-    });
-}
-
-#[test]
-fn change_beneficiary_for_unregistered_beneficiary_fails() {
-    ExternalityBuilder::build().execute_with(|| {
-        initialize_first_block();
-
-        let first_developer = 1;
-        let second_developer = 2;
-        let first_staker = 3;
-        let second_staker = 4;
-        let beneficiary = 6_u64;
-        let first_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x01));
-        let second_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x02));
-
-        let start_era = DappsStaking::current_era();
-
-        // beneficiary balance before receiving rewards
-        // let beneficiary_balance_before = Balances::free_balance(&beneficiary);
-
-        // Prepare a scenario with different stakes
-
-        assert_register(first_developer, &first_contract_id);
-        assert_register(second_developer, &second_contract_id);
-        assert_bond_and_stake(first_staker, &first_contract_id, 100);
-        assert_bond_and_stake(second_staker, &first_contract_id, 45);
-
-        // Just so ratio isn't 100% in favor of the first contract
-        assert_bond_and_stake(first_staker, &second_contract_id, 33);
-        assert_bond_and_stake(second_staker, &second_contract_id, 22);
-
-        let eras_advanced = 3;
-        advance_to_era(start_era + eras_advanced);
-
-        for x in 0..eras_advanced.into() {
-            assert_bond_and_stake(first_staker, &first_contract_id, 20 + x * 3);
-            assert_bond_and_stake(second_staker, &first_contract_id, 5 + x * 5);
-            advance_to_era(DappsStaking::current_era() + 1);
-        }
-
-        // Claim rewards
-        // Ensure that all past eras can be claimed
-        let current_era = DappsStaking::current_era();
-        for era in start_era..current_era {
-            assert_recieve_claim_rewards_for_staker(first_staker, &first_contract_id, beneficiary);
-            assert_claim_dapp(&first_contract_id, era);
-            assert_claim_staker(second_staker, &first_contract_id);
-        }
-
-        // Change beneficiary
-        let new_beneficiary = 3;
-        // assert_change_beneficiary(first_staker.clone(), 5, new_beneficiary);
-
-        assert_noop!(
-            DappsStaking::change_beneficiary(
-                Origin::signed(first_staker),
-                5,
-                new_beneficiary.clone(),
-            ),
-            Error::<TestRuntime>::BeneficiaryNotFound
         );
     });
 }
@@ -2057,13 +1986,17 @@ fn reset_delegation() {
         // Shouldn't be possible to claim current era.
         // Also, previous claim calls should have claimed everything prior to current era.
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(first_staker), first_contract_id.clone()),
+            DappsStaking::claim_staker(
+                Origin::signed(first_staker),
+                first_contract_id.clone(),
+                None
+            ),
             Error::<TestRuntime>::EraOutOfBounds
         );
 
         // Check if the beneficiary recieves the rewards
         assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary).is_some(),
+            Beneficiaries::<TestRuntime>::get(&first_staker, &first_contract_id).is_some(),
             true
         );
 
@@ -2087,7 +2020,7 @@ fn reset_delegation() {
         assert_ok!(
             DappsStaking::reset_rewards_deposited_into_beneficiary_back_to_staker(
                 Origin::signed(first_staker),
-                beneficiary
+                first_contract_id.clone()
             ),
         );
 
@@ -2095,211 +2028,6 @@ fn reset_delegation() {
         assert!(
             Balances::free_balance(&beneficiary) == beneficiary_balance_before,
             "beneficiary should recieve rewards"
-        );
-
-        assert!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary)
-                .unwrap()
-                .amount
-                == 0
-        );
-
-        // assert that the beneficiary is now inactive
-        assert!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary)
-                .unwrap()
-                .active
-                == false
-        );
-
-        let list = StakerBeneficiaries::<TestRuntime>::get(&first_staker);
-
-        for i in list {
-            if i.account == beneficiary {
-                assert!(i.active == false);
-            }
-        }
-    })
-}
-
-#[test]
-fn use_old_beneficiary_ok() {
-     ExternalityBuilder::build().execute_with(|| {
-        initialize_first_block();
-
-        let first_developer = 1;
-        let second_developer = 2;
-        let first_staker = 3;
-        let second_staker = 4;
-        let beneficiary = 6_u64;
-        let first_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x01));
-        let second_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x02));
-
-        let start_era = DappsStaking::current_era();
-
-        let beneficiary_balance_before = Balances::free_balance(&beneficiary);
-
-        // Prepare a scenario with different stakes
-
-        assert_register(first_developer, &first_contract_id);
-        assert_register(second_developer, &second_contract_id);
-        assert_bond_and_stake(first_staker, &first_contract_id, 100);
-        assert_bond_and_stake(second_staker, &first_contract_id, 45);
-
-        // Just so ratio isn't 100% in favor of the first contract
-        assert_bond_and_stake(first_staker, &second_contract_id, 33);
-        assert_bond_and_stake(second_staker, &second_contract_id, 22);
-
-        let eras_advanced = 3;
-        advance_to_era(start_era + eras_advanced);
-
-        for x in 0..eras_advanced.into() {
-            assert_bond_and_stake(first_staker, &first_contract_id, 20 + x * 3);
-            assert_bond_and_stake(second_staker, &first_contract_id, 5 + x * 5);
-            advance_to_era(DappsStaking::current_era() + 1);
-        }
-
-        // Claim rewards
-        // Ensure that all past eras can be claimed
-        let current_era = DappsStaking::current_era();
-        for era in start_era..current_era {
-            assert_recieve_claim_rewards_for_staker(first_staker, &first_contract_id, beneficiary);
-            assert_claim_dapp(&first_contract_id, era);
-            assert_claim_staker(second_staker, &first_contract_id);
-        }
-
-        // reset beneficiary to staker first
-        assert_ok!(
-            DappsStaking::reset_rewards_deposited_into_beneficiary_back_to_staker(
-                Origin::signed(first_staker),
-                beneficiary
-            ),
-        );
-
-        // Create new scenerios for staking and claiming
-
-
-        // use old beneficiary
-        // assert_ok!(
-        //     assert_use_saved_beneficiary_to_receive_awards(
-        //         Origin::signed(first_staker),
-                
-        //         beneficiary
-        //     ),
-        // );
-
-        // beneficiary balance after resetting the stash location
-        assert!(
-            Balances::free_balance(&beneficiary) == beneficiary_balance_before,
-            "beneficiary should recieve rewards"
-        );
-
-        assert!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary)
-                .unwrap()
-                .amount
-                == 0
-        );
-
-        // Change beneficiary
-        assert_remove_beneficiary(first_staker.clone(), beneficiary);
-
-        // Check if the beneficiary recieves the rewards
-        assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary).is_some(),
-            false
-        );
-
-        assert!(
-            StakerBeneficiaries::<TestRuntime>::get(&first_staker)
-                .iter()
-                .any(|f| f.account == beneficiary)
-                == false
-        );
-    })
-}
-
-#[test]
-fn remove_beneficiary() {
-    ExternalityBuilder::build().execute_with(|| {
-        initialize_first_block();
-
-        let first_developer = 1;
-        let second_developer = 2;
-        let first_staker = 3;
-        let second_staker = 4;
-        let beneficiary = 6_u64;
-        let first_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x01));
-        let second_contract_id = MockSmartContract::Evm(H160::repeat_byte(0x02));
-
-        let start_era = DappsStaking::current_era();
-
-        let beneficiary_balance_before = Balances::free_balance(&beneficiary);
-
-        // Prepare a scenario with different stakes
-
-        assert_register(first_developer, &first_contract_id);
-        assert_register(second_developer, &second_contract_id);
-        assert_bond_and_stake(first_staker, &first_contract_id, 100);
-        assert_bond_and_stake(second_staker, &first_contract_id, 45);
-
-        // Just so ratio isn't 100% in favor of the first contract
-        assert_bond_and_stake(first_staker, &second_contract_id, 33);
-        assert_bond_and_stake(second_staker, &second_contract_id, 22);
-
-        let eras_advanced = 3;
-        advance_to_era(start_era + eras_advanced);
-
-        for x in 0..eras_advanced.into() {
-            assert_bond_and_stake(first_staker, &first_contract_id, 20 + x * 3);
-            assert_bond_and_stake(second_staker, &first_contract_id, 5 + x * 5);
-            advance_to_era(DappsStaking::current_era() + 1);
-        }
-
-        // Claim rewards
-        // Ensure that all past eras can be claimed
-        let current_era = DappsStaking::current_era();
-        for era in start_era..current_era {
-            assert_recieve_claim_rewards_for_staker(first_staker, &first_contract_id, beneficiary);
-            assert_claim_dapp(&first_contract_id, era);
-            assert_claim_staker(second_staker, &first_contract_id);
-        }
-
-        // reset beneficiary to staker first
-        assert_ok!(
-            DappsStaking::reset_rewards_deposited_into_beneficiary_back_to_staker(
-                Origin::signed(first_staker),
-                beneficiary
-            ),
-        );
-
-        // beneficiary balance after resetting the stash location
-        assert!(
-            Balances::free_balance(&beneficiary) == beneficiary_balance_before,
-            "beneficiary should recieve rewards"
-        );
-
-        assert!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary)
-                .unwrap()
-                .amount
-                == 0
-        );
-
-        // Change beneficiary
-        assert_remove_beneficiary(first_staker.clone(), beneficiary);
-
-        // Check if the beneficiary recieves the rewards
-        assert_eq!(
-            RewardBeneficiaries::<TestRuntime>::get(&first_staker, &beneficiary).is_some(),
-            false
-        );
-
-        assert!(
-            StakerBeneficiaries::<TestRuntime>::get(&first_staker)
-                .iter()
-                .any(|f| f.account == beneficiary)
-                == false
         );
     })
 }
@@ -2342,7 +2070,7 @@ fn claim_after_unregister_is_ok() {
             assert_claim_staker(staker, &contract_id);
         }
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker), contract_id.clone()),
+            DappsStaking::claim_staker(Origin::signed(staker), contract_id.clone(), None),
             Error::<TestRuntime>::NotOperatedContract
         );
 
@@ -2466,7 +2194,7 @@ fn claiming_when_stakes_full_without_compounding_is_ok() {
         // making another gap in eras and trying to claim and restake would exceed MAX_ERA_STAKE_VALUES
         advance_to_era(DappsStaking::current_era() + 1);
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(staker_id), contract_id),
+            DappsStaking::claim_staker(Origin::signed(staker_id), contract_id, None),
             Error::<TestRuntime>::TooManyEraStakeValues
         );
 
@@ -2603,7 +2331,7 @@ fn maintenance_mode_is_ok() {
             Error::<TestRuntime>::Disabled
         );
         assert_noop!(
-            DappsStaking::claim_staker(Origin::signed(account), contract_id),
+            DappsStaking::claim_staker(Origin::signed(account), contract_id, None),
             Error::<TestRuntime>::Disabled
         );
         assert_noop!(

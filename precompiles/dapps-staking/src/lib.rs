@@ -286,7 +286,11 @@ where
 
         // Build call with origin.
         let origin = R::AddressMapping::into_account_id(handle.context().caller);
-        let call = pallet_dapps_staking::Call::<R>::claim_staker { contract_id }.into();
+        let call = pallet_dapps_staking::Call::<R>::claim_staker {
+            contract_id,
+            beneficiary: None,
+        }
+        .into();
 
         RuntimeHelper::<R>::try_dispatch(handle, Some(origin).into(), call)?;
 
@@ -295,35 +299,35 @@ where
 
     /// Deposit rewards to the delegated beneficiary. Also creates a new one if it doesn't exist.
     /// Note that this only applies to the first beneficiary.
-    fn deposit_rewards_to_delegated_beneficiary(
-        handle: &mut impl PrecompileHandle,
-    ) -> EvmResult<PrecompileOutput> {
-        let mut input = handle.read_input()?;
-        input.expect_arguments(2)?;
+    // fn deposit_rewards_to_delegated_beneficiary(
+    //     handle: &mut impl PrecompileHandle,
+    // ) -> EvmResult<PrecompileOutput> {
+    //     let mut input = handle.read_input()?;
+    //     input.expect_arguments(2)?;
 
-        // parse contract's address
-        let contract_h160 = input.read::<Address>()?.0;
-        let contract_id = Self::decode_smart_contract(contract_h160)?;
+    //     // parse contract's address
+    //     let contract_h160 = input.read::<Address>()?.0;
+    //     let contract_id = Self::decode_smart_contract(contract_h160)?;
 
-        // parse target address for claiming rewards
-        let beneficiary_vec: Vec<u8> = input.read::<Bytes>()?.into();
-        let beneficiary = Self::parse_input_address(beneficiary_vec)?;
+    //     // parse target address for claiming rewards
+    //     let beneficiary_vec: Vec<u8> = input.read::<Bytes>()?.into();
+    //     let beneficiary = Self::parse_input_address(beneficiary_vec)?;
 
-        // Build call with origin.
-        let origin = R::AddressMapping::into_account_id(handle.context().caller);
+    //     // Build call with origin.
+    //     let origin = R::AddressMapping::into_account_id(handle.context().caller);
 
-        log::trace!(target: "ds-precompile", "register_delegated_account_and_deposit_rewards {:?} {:?}", contract_id, beneficiary);
+    //     log::trace!(target: "ds-precompile", "register_delegated_account_and_deposit_rewards {:?} {:?}", contract_id, beneficiary);
 
-        let call = pallet_dapps_staking::Call::<R>::deposit_rewards_to_delegated_beneficiary {
-            contract_id,
-            target: beneficiary,
-        }
-        .into();
+    //     let call = pallet_dapps_staking::Call::<R>::deposit_rewards_and_delegate_beneficiary {
+    //         contract_id,
+    //         target: beneficiary,
+    //     }
+    //     .into();
 
-        RuntimeHelper::<R>::try_dispatch(handle, Some(origin).into(), call)?;
+    //     RuntimeHelper::<R>::try_dispatch(handle, Some(origin).into(), call)?;
 
-        Ok(succeed(EvmDataWriter::new().write(true).build()))
-    }
+    //     Ok(succeed(EvmDataWriter::new().write(true).build()))
+    // }
 
     /// Set claim reward destination for the caller
     fn set_reward_destination(handle: &mut impl PrecompileHandle) -> EvmResult<PrecompileOutput> {
@@ -472,9 +476,6 @@ pub enum Action {
     ClaimDapp = "claim_dapp(address,uint128)",
     ClaimStaker = "claim_staker(address)",
     SetRewardDestination = "set_reward_destination(uint8)",
-    // this is the evm function selector for the precompile staking wrapper
-    RegisterDelegatedAccountAndDepositRewards =
-        "deposit_rewards_to_delegated_beneficiary(uint128, address)",
     WithdrawFromUnregistered = "withdraw_from_unregistered(address)",
     NominationTransfer = "nomination_transfer(address,uint128,address)",
 }
@@ -523,9 +524,6 @@ where
             Action::WithdrawUnbounded => Self::withdraw_unbonded(handle),
             Action::ClaimDapp => Self::claim_dapp(handle),
             Action::ClaimStaker => Self::claim_staker(handle),
-            Action::RegisterDelegatedAccountAndDepositRewards => {
-                Self::deposit_rewards_to_delegated_beneficiary(handle)
-            }
             Action::SetRewardDestination => Self::set_reward_destination(handle),
             Action::WithdrawFromUnregistered => Self::withdraw_from_unregistered(handle),
             Action::NominationTransfer => Self::nomination_transfer(handle),

@@ -518,6 +518,7 @@ pub(crate) fn assert_claim_staker(claimer: AccountId, contract_id: &MockSmartCon
     assert_ok!(DappsStaking::claim_staker(
         Origin::signed(claimer),
         contract_id.clone(),
+        None
     ));
 
     // let second_balance = <TestRuntime as Config>::Currency::free_balance(&claimer);
@@ -626,13 +627,11 @@ pub(crate) fn assert_recieve_claim_rewards_for_staker(
     let issuance_before_claim = <TestRuntime as Config>::Currency::total_issuance();
 
     // register first beneficiary and deposit rewards to it
-    assert_ok!(DappsStaking::deposit_rewards_and_delegate_beneficiary(
+    assert_ok!(DappsStaking::claim_staker(
         Origin::signed(claimer),
         contract_id.clone(),
-        target.clone(),
+        Some(target.clone())
     ));
-
-    // println!("reward: {:?}", calculated_reward);
 
     // test balance of beneficiary
     assert_eq!(
@@ -674,7 +673,7 @@ pub(crate) fn assert_recieve_claim_rewards_for_staker(
         );
     }
 
-    // last event should be laimRewardsAndDepositToBeneficiary
+    // last event should be ClaimRewardsAndDepositToBeneficiary
     System::assert_last_event(mock::Event::DappsStaking(
         Event::ClaimRewardsAndDepositToBeneficiary(
             claimer,
@@ -693,7 +692,6 @@ pub(crate) fn assert_recieve_claim_rewards_for_staker(
             contract_id
         ));
     } else {
-        // println!("new_era: {:?} claim_era: {:?}", new_era, claim_era);
         assert!(new_era > claim_era);
     }
     assert!(new_era.is_zero() || new_era > claim_era);
@@ -711,41 +709,41 @@ pub(crate) fn assert_recieve_claim_rewards_for_staker(
 }
 
 pub(crate) fn assert_registered_second_beneficiary(
-    claimer: AccountId,
     first_beneficiary: AccountId,
+    contract_id: &MockSmartContract<AccountId>,
     second_beneficiary: AccountId,
+    staker: AccountId,
 ) {
     //clean up possible leftover events
     System::reset_events();
 
-    // check if the first beneficiary is not the same as the second beneficiary
-    assert!(
-        first_beneficiary != second_beneficiary,
-        "first beneficiary and second beneficiary are the same"
-    );
-
     // check if the `first_beneficiary` field is actually the beneficiary of the staker
     assert_eq!(
-        DappsStaking::reward_beneficiaries(&claimer, &first_beneficiary).is_some(),
+        DappsStaking::beneficiaries(&staker, &contract_id).is_some(),
         true,
     );
 
-    // unwrap is safe here because we know that the `first_beneficiary` is a beneficiary of the staker
-
-    DappsStaking::reward_beneficiaries(&claimer, &first_beneficiary).unwrap();
-
+    // register the second beneficiary and remove the first one
     assert_ok!(
         DappsStaking::deposit_rewards_to_second_beneficiary_and_register_second_beneficiary(
-            Origin::signed(first_beneficiary),
-            claimer.clone(),
+            Origin::signed(first_beneficiary.clone()),
+            contract_id.clone(),
             second_beneficiary.clone(),
+            staker
         )
+    );
+
+    assert!(
+        DappsStaking::beneficiaries(&staker, &contract_id)
+            .unwrap()
+            .account
+            != first_beneficiary
     );
 }
 
 pub(crate) fn assert_change_beneficiary(
     staker: AccountId,
-    old_beneficiary: AccountId,
+    contract_id: &MockSmartContract<AccountId>,
     new_beneficiary: AccountId,
 ) {
     //clean up possible leftover events
@@ -753,88 +751,15 @@ pub(crate) fn assert_change_beneficiary(
 
     // check if the `old_beneficiary` field is actually the beneficiary of the staker
     assert_eq!(
-        DappsStaking::reward_beneficiaries(&staker, &old_beneficiary).is_some(),
+        DappsStaking::beneficiaries(&staker, &contract_id).is_some(),
         true,
     );
-
-    // assert!(list_of_beneficiaries.contains(&old_beneficiary));
 
     assert_ok!(DappsStaking::change_beneficiary(
         Origin::signed(staker),
-        old_beneficiary.clone(),
+        contract_id.clone(),
         new_beneficiary.clone(),
     ));
-
-    let list_of_beneficiaries = DappsStaking::staker_beneficiaries(&staker);
-
-    // check if the `new_beneficiary` field is now the beneficiary of the staker
-    assert_eq!(
-        DappsStaking::reward_beneficiaries(&staker, &new_beneficiary).is_some(),
-        true,
-    );
-
-    assert_eq!(
-        list_of_beneficiaries
-            .iter()
-            .any(|x| { x.account == new_beneficiary }),
-        true
-    );
-}
-
-pub(crate) fn assert_use_saved_beneficiary_to_receive_awards(
-    staker: AccountId,
-    contract_id: &MockSmartContract<AccountId>,
-    beneficiary: AccountId,
-) {
-    //clean up possible leftover events
-    System::reset_events();
-
-    // check if the `old_beneficiary` field is actually the beneficiary of the staker
-    assert_eq!(
-        DappsStaking::reward_beneficiaries(&staker, &beneficiary).is_some(),
-        true,
-    );
-
-    // assert!(list_of_beneficiaries.contains(&old_beneficiary));
-
-    assert_ok!(DappsStaking::use_saved_beneficiary_to_receive_rewards(
-        Origin::signed(staker),
-        beneficiary.clone(),
-        contract_id.clone(),
-    ));
-
-    let list_of_beneficiaries = DappsStaking::staker_beneficiaries(&staker);
-
-    // check if the `beneficiary` field is now removed from the list of beneficiaries
-    assert_eq!(list_of_beneficiaries.is_empty(), false);
-}
-
-pub(crate) fn assert_remove_beneficiary(staker: AccountId, beneficiary: AccountId) {
-    //clean up possible leftover events
-    System::reset_events();
-
-    // check if the `beneficiary` field is actually the beneficiary of the staker
-    assert_eq!(
-        DappsStaking::reward_beneficiaries(&staker, &beneficiary).is_some(),
-        true,
-    );
-
-    // assert!(list_of_beneficiaries.contains(&old_beneficiary));
-
-    assert_ok!(DappsStaking::remove_beneficiary(
-        Origin::signed(staker),
-        beneficiary.clone(),
-    ));
-
-    let list_of_beneficiaries = DappsStaking::staker_beneficiaries(&staker);
-
-    // check if the `new_beneficiary` field is now the beneficiary of the staker
-    assert!(StakerBeneficiaries::<TestRuntime>::get(&staker).is_empty());
-
-    assert_eq!(
-        DappsStaking::reward_beneficiaries(&staker, &beneficiary).is_none(),
-        true,
-    );
 }
 
 // assert staked and locked states depending on should_restake_reward

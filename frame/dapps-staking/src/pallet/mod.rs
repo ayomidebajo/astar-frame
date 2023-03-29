@@ -187,37 +187,10 @@ pub mod pallet {
         ValueQuery,
     >;
 
-    /// Stores the staker's reward beneficiaries
-    /// This first account is the staker's account
-    /// The second account is the beneficiary's account
-    ///
-    /// Using this illustration: ALICE -> BOB -> CAROL
-    /// If BOB is a beneficiary, the he delegates his role to CAROL, then the reward will be transferred to CAROL, and also BOB makes himself inactive and CAROL active.
-    #[pallet::storage]
-    #[pallet::getter(fn reward_beneficiaries)]
-    pub type RewardBeneficiaries<T: Config> = StorageDoubleMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        Blake2_128Concat,
-        T::AccountId,
-        RewardBeneficiary<T::SmartContract, BalanceOf<T>>,
-        OptionQuery,
-    >;
-
     /// Stores the list of beneficiaries for a particular staker.
-    /// This is also used to limit the number of beneficiaries that can be stored in `RewardBeneficiaries` map.
-    #[pallet::storage]
-    #[pallet::getter(fn staker_beneficiaries)]
-    pub type StakerBeneficiaries<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        Vec<BeneficiaryInfo<T::AccountId>>,
-        ValueQuery,
-    >;
-
-    /// Stores the list of beneficiaries for a particular staker.
+    /// `T::AccountId` is the staker account Id.
+    /// `T::SmartContract` is the smart contract Id.
+    /// `BeneficiaryReward` contains the account Id of the beneficiary and the amount deposited into the beneficiary's account this is used to track the amount each beneficiary has received for future operations.
     #[pallet::storage]
     #[pallet::getter(fn beneficiaries)]
     pub type Beneficiaries<T: Config> = StorageDoubleMap<
@@ -1029,6 +1002,7 @@ pub mod pallet {
         /// `origin` - The first beneficiary, BOB
         /// `original_staker` - The original staker, ALICE
         /// `target` - The new beneficiary, CAROL
+        /// `contract_id` - The contract id
         /// We need the original staker in order to get the beneficiary info
         #[pallet::weight(0)]
         pub fn deposit_rewards_to_second_beneficiary_and_register_second_beneficiary(
@@ -1088,9 +1062,8 @@ pub mod pallet {
         }
 
         /// Transfer rewards to a new beneficiary and register a new beneficiary, this is done by ALICE
-        /// ALICE decides to make BOB inactive and CAROL active and also transfer the rewards to CAROL
         /// `origin` - The original staker, ALICE
-        /// `old_beneficiary` - The first beneficiary, BOB
+        /// `contract_id` - contract id
         /// `new_beneficiary` - The new beneficiary, CAROL
         #[pallet::weight(0)]
         pub fn change_beneficiary(

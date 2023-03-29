@@ -496,7 +496,7 @@ pub enum RewardDestination {
     /// Rewards are transferred to stakers balance and are immediately re-staked
     /// on the contract from which the reward was received.
     StakeBalance,
-    /// Rewards are deposited into a delegated beneficiary account.
+    /// This indicates that the Rewards are deposited into a delegated beneficiary account.
     BeneficiaryBalance,
 }
 
@@ -505,61 +505,14 @@ impl Default for RewardDestination {
         RewardDestination::StakeBalance
     }
 }
-
-#[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-pub enum EmbededDestination<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
-    #[default]
-    None,
-    Destination {
-        who: AccountId,
-        amount: Balance,
-    },
-}
-
-#[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-
-pub enum SmartContractAddress<SmartContract> {
-    #[default]
-    None,
-    Address(SmartContract),
-}
-
-#[derive(Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo)]
-
-pub enum DelegatedAddress<AccountId> {
-    #[default]
-    None,
-    Address(AccountId),
-}
-
 /// contains information about each beneficiary for a particular staker
-#[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
-
-pub struct RewardBeneficiary<SmartContract, Balance: AtLeast32BitUnsigned + Default + Copy> {
-    /// Amount of rewards deposited.
-    #[codec(compact)]
-    pub amount: Balance,
-    // smart contract the staker was awarded from after staking on the contract
-    pub contract_id: SmartContractAddress<SmartContract>,
-    // indicates whether the beneficiary is active or not
-    pub active: bool,
-}
-
 #[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub struct BeneficiaryReward<AccountId, Balance: AtLeast32BitUnsigned + Default + Copy> {
     /// Amount of rewards deposited.
     #[codec(compact)]
     pub amount: Balance,
-
+    /// The account of the beneficiary
     pub account: AccountId,
-    // indicates whether the beneficiary is active or not
-    // pub active: bool,
-}
-
-#[derive(Clone, PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
-pub struct BeneficiaryInfo<AccountId> {
-    pub account: AccountId,
-    pub active: bool,
 }
 
 /// Contains information about account's locked & unbonding balances.
